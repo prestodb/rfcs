@@ -45,7 +45,7 @@ When we are moving the error messages to resource files, we can also load locale
             2. On server startup verify that all the defined enums have a corresponding entry in default Messages.properties file. 
  14. OSS community will maintain English bundle for presto-main and the other connectors. 
  15. OSS community can optionally maintain additional bundles for different locales but Presto can also read available bundles from a specified path at runtime, so sys admins can choose to maintain their own version of localized error bundles. 
- 16. The error bundles for English and localized bundles for both presto-main and other connectors can be verified to be consistent in step 13. 2. mentioned above. (If we choose that approach) 
+ 16. The error bundles for English and localized bundles for both presto-main and other connectors can be verified to be consistent in step 13. ii. mentioned above. (If we choose that approach) 
 
 ## [Optional] Metrics
 
