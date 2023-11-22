@@ -49,6 +49,10 @@ When we are moving the error messages to resource files, we can also load locale
  16. OSS community can optionally maintain additional bundles for different locales but Presto can also read available bundles from a specified path at runtime, so sys admins can choose to maintain their own version of localized error bundles. 
  17. The error bundles for English and localized bundles for both presto-main and other connectors can be verified to be consistent in step 15. ii. mentioned above. (If we choose that approach) 
 
+ ### Design diagram
+
+ ![Design diagram](ErrorLocalisation.png)
+
 ## [Optional] Metrics
 
 How can we measure the impact of this feature?
