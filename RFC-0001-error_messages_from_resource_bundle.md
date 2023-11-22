@@ -27,6 +27,7 @@ When we are moving the error messages to resource files, we can also load locale
  1. Create a default Messages.properties resource under `src/main/resources/error` folder in presto-main module 
  2. Add all error messages used in Presto code in Messages.properties 
  3. Deprecate inline error messages in Presto code and load message from Messages.properties 
+ 4. Only load locale specific error messages if server property `error.i18n.enabled` is true. By default it's value will be false.
  4. Check if there are Messages files for different locales in `etc/resources/error` folder during Presto startup. If yes load those locale specific resources. 
  5. When loading messages from resources, load from the locale specific resource. The locale to be used should be determined from the client session. 
  6. Each plugin can define additional error messages under `src/main/resources/error` folder in the corresponding plugin module. 
@@ -46,7 +47,7 @@ When we are moving the error messages to resource files, we can also load locale
             2. On server startup verify that all the defined enums have a corresponding entry in default Messages.properties file. 
  15. OSS community will maintain English bundle for presto-main and the other connectors. 
  16. OSS community can optionally maintain additional bundles for different locales but Presto can also read available bundles from a specified path at runtime, so sys admins can choose to maintain their own version of localized error bundles. 
- 17. The error bundles for English and localized bundles for both presto-main and other connectors can be verified to be consistent in step 14. ii. mentioned above. (If we choose that approach) 
+ 17. The error bundles for English and localized bundles for both presto-main and other connectors can be verified to be consistent in step 15. ii. mentioned above. (If we choose that approach) 
 
 ## [Optional] Metrics
 
