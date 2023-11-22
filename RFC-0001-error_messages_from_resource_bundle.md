@@ -65,4 +65,4 @@ Based on the discussion, this may need to be updated with feedback from reviewer
 
 ## Test Plan
 
-A POC was developed that loads error messages from presto-main Messages.properties and from connector folders. This POC can be found here https://github.com/elbinpallimalilibm/presto/tree/error_message_load_from_plugins 
+A POC was developed that loads error messages from presto-main Messages.properties and from connector folders. This POC can be found here https://github.com/elbinpallimalilibm/presto/tree/error_message_load_from_plugins . https://github.com/elbinpallimalilibm/presto/compare/master...elbinpallimalilibm:presto:error_message_load_from_plugins
