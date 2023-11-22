@@ -24,28 +24,29 @@ When we are moving the error messages to resource files, we can also load locale
 
 ## Proposed Implementation
 
- 1. Create a default Messages.properties resource under src/main/resources/error folder in presto-main module 
+ 1. Create a default Messages.properties resource under `src/main/resources/error` folder in presto-main module 
  2. Add all error messages used in Presto code in Messages.properties 
  3. Deprecate inline error messages in Presto code and load message from Messages.properties 
- 4. Check if there is default property file or if there are Messages files for different locales in etc/resources/error folder during Presto startup. If yes load those locale specific resources. 
+ 4. Check if there are Messages files for different locales in `etc/resources/error` folder during Presto startup. If yes load those locale specific resources. 
  5. When loading messages from resources, load from the locale specific resource. The locale to be used should be determined from the client session. 
- 6. Each plugin can define additional error messages under src/main/resources/error folder in the corresponding plugin module. 
+ 6. Each plugin can define additional error messages under `src/main/resources/error` folder in the corresponding plugin module. 
  7. These resource files from plugins will be read on server startup and a combined resource file for each locale will be created. 
- 8. On server startup, read default and locale specific Messages.properties files from plugin/<plugin-name>/resources/error 
- 9. Load localized error messages in QueuedStatementResource.toQueryError method by getting the client locale from sessionContext.language 
- 10. Warn when the default resource bundle entries != the translated entries 
- 11. When a translation is not available, a locale message is transcribed that explains an error message is not available, and then prints the message in the default locale (English).  That makes it embarrassing to the deployer of Presto, but less bad than preventing debugging. 
- 12. Presto exceptions in query logs contain both the default and the locale-specific exception messages 
- 13. Compile time validation of error message keys. 
+ 8. On server startup, read locale specific Messages.properties files from a configurable path.
+ 9. Read the configurable path from `error.resources.location` connector property. The root will be `plugin/<connector-name>` and the default value will be `resources/error` 
+ 10. Load localized error messages in `QueuedStatementResource.toQueryError` method by getting the client locale from `sessionContext.language`
+ 11. Warn when the default resource bundle entries are not the same as the translated entries 
+ 12. When a translation is not available, a locale message is transcribed that explains an error message is not available, and then prints the message in the default locale (English).  That makes it embarrassing to the deployer of Presto, but less bad than preventing debugging. 
+ 13. Presto exceptions in query logs contain both the default and the locale-specific exception messages 
+ 14. Compile time validation of error message keys. 
         1. Unit test validation 
             1. All error message keys should be defined as enums 
             2. Write a unit test to ensure all the defined enums have a corresponding entry in default Messages.properties file. 
         2. Run time validation 
             1. All error message keys should be defined as enums 
             2. On server startup verify that all the defined enums have a corresponding entry in default Messages.properties file. 
- 14. OSS community will maintain English bundle for presto-main and the other connectors. 
- 15. OSS community can optionally maintain additional bundles for different locales but Presto can also read available bundles from a specified path at runtime, so sys admins can choose to maintain their own version of localized error bundles. 
- 16. The error bundles for English and localized bundles for both presto-main and other connectors can be verified to be consistent in step 13. ii. mentioned above. (If we choose that approach) 
+ 15. OSS community will maintain English bundle for presto-main and the other connectors. 
+ 16. OSS community can optionally maintain additional bundles for different locales but Presto can also read available bundles from a specified path at runtime, so sys admins can choose to maintain their own version of localized error bundles. 
+ 17. The error bundles for English and localized bundles for both presto-main and other connectors can be verified to be consistent in step 14. ii. mentioned above. (If we choose that approach) 
 
 ## [Optional] Metrics
 
