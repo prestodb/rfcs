@@ -37,12 +37,12 @@ When we are moving the error messages to resource files, we can also load locale
  11. When a translation is not available, a locale message is transcribed that explains an error message is not available, and then prints the message in the default locale (English).  That makes it embarrassing to the deployer of Presto, but less bad than preventing debugging. 
  12. Presto exceptions in query logs contain both the default and the locale-specific exception messages 
  13. Compile time validation of error message keys. 
-    1. Unit test validation 
-        1. All error message keys should be defined as enums 
-        2. Write a unit test to ensure all the defined enums have a corresponding entry in default Messages.properties file. 
-    2. Run time validation 
-        1. All error message keys should be defined as enums 
-        2. On server startup verify that all the defined enums have a corresponding entry in default Messages.properties file. 
+        1. Unit test validation 
+            1. All error message keys should be defined as enums 
+            2. Write a unit test to ensure all the defined enums have a corresponding entry in default Messages.properties file. 
+        2. Run time validation 
+            1. All error message keys should be defined as enums 
+            2. On server startup verify that all the defined enums have a corresponding entry in default Messages.properties file. 
  14. OSS community will maintain English bundle for presto-main and the other connectors. 
  15. OSS community can optionally maintain additional bundles for different locales but Presto can also read available bundles from a specified path at runtime, so sys admins can choose to maintain their own version of localized error bundles. 
  16. The error bundles for English and localized bundles for both presto-main and other connectors can be verified to be consistent in step 13. 2. mentioned above. (If we choose that approach) 
