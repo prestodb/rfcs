@@ -31,7 +31,7 @@ When we are moving the error messages to resource files, we can also load locale
  5. When loading messages from resources, load from the locale specific resource. The locale to be used should be determined from the client session. 
  6. Each plugin can define additional error messages under `src/main/resources/error` folder in the corresponding plugin module. 
  7. These resource files from plugins will be read on server startup and a combined resource file for each locale will be created. 
- 8. On server startup, read locale specific Messages.properties files from a configurable path.
+ 8. On server startup, read locale specific Messages.properties files for connector from a configurable path.
  9. Read the configurable path from `error.resources.location` connector property. The root will be `plugin/<connector-name>` and the default value will be `resources/error` 
  10. Load localized error messages in `QueuedStatementResource.toQueryError` method by getting the client locale from `sessionContext.language`
  11. Warn when the default resource bundle entries are not the same as the translated entries 
