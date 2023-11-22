@@ -58,13 +58,11 @@ Based on the discussion, this may need to be updated with feedback from reviewer
 
 ## Adoption Plan
 
-- What impact (if any) will there be on existing users? Are there any new session parameters, configurations, SPI updates, client API updates, or SQL grammar?
-- If we are changing behaviour how will we phase out the older behaviour?
-- If we need special migration tools, describe them here.
-- When will we remove the existing behaviour, if applicable.
-- How should this feature be taught to new and existing users? Basically mention if documentation changes/new blog are needed?
-- What related issues do you consider out of scope for this RFC that could be addressed in the future independently of the solution that comes out of this RFC?
+- All future code contributions to Presto should use error messages loaded from resource file as mentioned above.
+- All inline error messages need to be moved to resource files and PrestoException and similar classes should have their signature updated to accept an error key and arguments for the error message.
+- Create a wiki on how to define a new error message and how to create a localized version of resource file for error messages.
+
 
 ## Test Plan
 
-How do we ensure the feature works as expected? Mention if any functional tests/integration tests are needed. Special mention for product-test changes. If any PoC has been done already, please mention the relevant test results here that you think will bolster your case of getting this RFC approved.
+A POC was developed that loads error messages from presto-main Messages.properties and from connector folders. This POC can be found here https://github.com/elbinpallimalilibm/presto/tree/error_message_load_from_plugins 
