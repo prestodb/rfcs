@@ -24,6 +24,8 @@ When we are moving the error messages to resource files, we can also load locale
 
 ## Proposed Implementation
 
+### Presto implementation
+
  1. Create a default Messages.properties resource under `src/main/resources/error` folder in presto-main module 
  2. Add all error messages used in Presto code in Messages.properties 
  3. Deprecate inline error messages in Presto code and load message from Messages.properties 
@@ -49,9 +51,15 @@ When we are moving the error messages to resource files, we can also load locale
  16. OSS community can optionally maintain additional bundles for different locales but Presto can also read available bundles from a specified path at runtime, so sys admins can choose to maintain their own version of localized error bundles. 
  17. The error bundles for English and localized bundles for both presto-main and other connectors can be verified to be consistent in step 15. ii. mentioned above. (If we choose that approach) 
 
- ### Design diagram
+### Prestissimo implementation
 
- ![Design diagram](ErrorLocalisation.png)
+ 1. Define error message keys as enums in presto-native CPP code.
+ 2. Update exception macros in files like https://github.com/facebookincubator/velox/blob/523e561d3da99a78a33c4e22106ba7d1cf83c8a2/velox/common/base/Exceptions.h to set error code `ExecutionFailureInfo` struct to the error message key
+ 3. When the result reaches the Presto co-ordinator, read the error code from `ExecutionFailureInfo` and read the localized error message as mentioned in steps 10. 
+
+### Design diagram
+
+![Design diagram](ErrorLocalisation.png)
 
 ## [Optional] Metrics
 
