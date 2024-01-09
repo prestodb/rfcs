@@ -54,8 +54,8 @@ When we are moving the error messages to resource files, we can also load locale
 ### Prestissimo implementation
 
  1. Define error message keys as enums in presto-native CPP code.
- 2. Update exception macros in files like https://github.com/facebookincubator/velox/blob/523e561d3da99a78a33c4e22106ba7d1cf83c8a2/velox/common/base/Exceptions.h to set error code `ExecutionFailureInfo` struct to the error message key
- 3. When the result reaches the Presto co-ordinator, read the error code from `ExecutionFailureInfo` and read the localized error message as mentioned in steps 10. 
+ 2. Update exception macros in files like https://github.com/facebookincubator/velox/blob/523e561d3da99a78a33c4e22106ba7d1cf83c8a2/velox/common/base/Exceptions.h to set error code in `ExecutionFailureInfo` struct to the error message key
+ 3. When the result reaches the Presto co-ordinator, read the error code from `ExecutionFailureInfo` and read the localized error message as mentioned in step 10. 
 
 ### Design diagram
 
