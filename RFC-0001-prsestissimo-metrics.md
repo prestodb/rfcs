@@ -71,7 +71,7 @@ To record values against the registered metrics, users invoke **RECORD_METRIC_VA
 
 ### Current Reporting Flow
 
-#### Event driven metrics reporting (Blocking)
+#### Event driven metrics reporting (Blocking Call)
 
 Most of the Velox metrics are reported when a specific event occurs. It’s not periodic like Prestissimo counters. For instance, when memory is reclaimed from a query pool, we try to maintain a counter that is incremented each time when this event occurs:
 ```
@@ -89,7 +89,7 @@ This type of reporting could occur in the execution path of a query and has pote
 Luckily there aren't too many metrics that are reported with this approach. One possible way to counter this is by making an
 async call to RECORD_METRIC_VALUE.
 
-#### Periodic reporting of Counters (Non Blocking)
+#### Periodic reporting of Counters (Non Blocking Call)
 
 Majority of metrics in Prestissimo are periodically aggregated and reported via BaseStatsReporter as follows:
 1. PrestoServer registers PrestoCPP counters and Velox runtime metrics at the launch of the application.
@@ -105,15 +105,15 @@ Majority of metrics in Prestissimo are periodically aggregated and reported via 
 
 BaseStatsReporter has following APIS that must be implemented for user to capture metrics:
 
-void registerMetricExportType(<key>, <type>) to Register a metric of type COUNT, SUM, AVG.
+`void registerMetricExportType(<key>, <type>)` to Register a metric of type COUNT, SUM, AVG.
 
-void registerHistogramMetricExportType(<key>, <bucketwidth>,<min>,<max>, <vector<pct>>)  to register a HISTOGRAM.
+`void registerHistogramMetricExportType(<key>, <bucketwidth>,<min>,<max>, <vector<pct>>)`  to register a HISTOGRAM.
 
-void addMetricValue(<key>, <value>) to add a value for a metric key previously registered.
+`void addMetricValue(<key>, <value>)` to add a value for a metric key previously registered.
 
-void addHistogramMetricValue(<key, <value>) to add a value to a histogram type metric key.
+`void addHistogramMetricValue(<key, <value>)` to add a value to a histogram type metric key.
 
-The metrics are reported by one of the above reporting flows. The user implementing BaseStatsReporter must adhere to the above Metrics Semantics of Velox while storing the metrics. That implies, the COUNT type metric must not be overridden and continuously grow with time,  On the other hand, the sum metrics which reports the change in aggregated stats over a period of time will overwrite the value against that metric key. Same applies to AVG, RATE and HISTOGRAMs.
+The metrics are reported by one of the [above] reporting flows. The user implementing BaseStatsReporter must adhere to the above Metrics Semantics of Velox while storing the metrics. That implies, the COUNT type metric must not be overridden and continuously grow with time,  On the other hand, the sum metrics which reports the change in aggregated stats over a period of time will overwrite the value against that metric key. Same applies to AVG, RATE and HISTOGRAMs.
 
 At any instant, we have a snapshot of metrics maintained which is overwritten on new updates.
 
@@ -122,7 +122,8 @@ At any instant, we have a snapshot of metrics maintained which is overwritten on
 To keep it simple, the prestissimo worker will behave like an exporter and exposes the REST endpoint `/v1/info/health/metrics`. The Prometheus server can be configured to pull metrics from the worker itself. Again, it is up to the user if they want to introduce another layer in between the Time series DB and the worker.
 
 **A sidecar metric exporter:**
-An sidecar HTTP server that fetches metrics from Prestissimo.
+A sidecar HTTP server that fetches metrics from Prestissimo. This would require launching as a child process of Prestissimo or as a separate container in the same POD as Prestissimo.
+Either way, this would take additional resources on the node which we would rather use for Query processsing.
 
 ### Storing metric values in BaseStatsReporter:
 #### Memory footprint
@@ -139,6 +140,7 @@ We have in total 103 + 28 +  7= 138 metric keys defined in PrestoCPP and Velox. 
 
 We can maintain a mapping of metric key (which can be anywhere between 30 to 50 characters) and metric value in the impelementation of BaseStatsReporter class.
 Each of the above metric value is stored in a 8 byte integer type. At any moment we may have 138 × 8 = 1104 bytes of values data held in-memory. Also, we have 138 × ~50 = 6900 ~ 7K bytes for keys. In total we have 7K + 1104 ~ 8K bytes of memory. Thus holding metrics in memory has least impact on Prestissimo worker.
+
 Given the above estimates, we decide keep the stats in-memory and we can revisit this if the memory footprint grows.
 
 Note: Estimating the size of a histogram with quantiles is not straight forward, it depends on rotation time and error tolerance settings.
@@ -149,13 +151,17 @@ On other hand, we can maintain a list of metric values and timestamps seen so fa
 
 ### Serialization Format (TBD)
 #### Prometheus Data model
-We need to define metric labels which are used at Prometheus client end to filter metrics. For instance, a simple label in our case could be cluster name and worker IP. Since metrics are coming from each worker, we need a way to isolate and monitor them. For cluster name, we are relying on the node.environment config property and for worker IP, we are relying on the HOSTNAME environment variable. Here is a sample of metrics formatted using this data model.
+We need to define metric labels which are used at Prometheus client end to filter metrics. For instance, a simple label in our case could be cluster name and worker IP. Since metrics are coming from each worker, we need a way to isolate and monitor them. For cluster name, we are relying on the `node.environment` config property and for worker IP, we are relying on the `HOSTNAME` environment variable. Here is a sample of metrics formatted using this data model.
+Counter
 ```
 # HELP presto_cpp_http_client_presto_exchange_source_num_on_body
 # TYPE presto_cpp_http_client_presto_exchange_source_num_on_body counter
 presto_cpp_http_client_presto_exchange_source_num_on_body{cluster="testing",worker="Local"} 5
 # TYPE presto_cpp_memory_cache_hit_bytes gauge
 presto_cpp_memory_cache_hit_bytes{cluster="testing",worker="Local"} 0
+```
+Gauge
+```
 # HELP presto_cpp_mapped_memory_bytes
 # TYPE presto_cpp_mapped_memory_bytes gauge
 presto_cpp_mapped_memory_bytes{cluster="testing",worker="Local"} 806912
@@ -163,17 +169,62 @@ presto_cpp_mapped_memory_bytes{cluster="testing",worker="Local"} 806912
 # TYPE presto_cpp_os_system_cpu_time_micros gauge
 presto_cpp_os_system_cpu_time_micros{cluster="testing",worker="Local"} 2218
 ```
-#### Define Custom interface
-By default, we shall implement JSON and Prometheus Data Model serialization of metrics. We shall expose a new Serialization interface that users can implement to customize serialization.
-Pros: In-house.
-Cons: Keeping it in sync with Prometheus data model.
+Histogram
+```
+# TYPE velox_hive_file_handle_generate_latency_ms histogram
+velox_hive_file_handle_generate_latency_ms_count{cluster="testing",worker=""} 0
+velox_hive_file_handle_generate_latency_ms_sum{cluster="testing",worker=""} 0
+velox_hive_file_handle_generate_latency_ms_bucket{cluster="testing",worker="",le="10000"} 0
+velox_hive_file_handle_generate_latency_ms_bucket{cluster="testing",worker="",le="20000"} 0
+velox_hive_file_handle_generate_latency_ms_bucket{cluster="testing",worker="",le="30000"} 0
+velox_hive_file_handle_generate_latency_ms_bucket{cluster="testing",worker="",le="40000"} 0
+velox_hive_file_handle_generate_latency_ms_bucket{cluster="testing",worker="",le="50000"} 0
+velox_hive_file_handle_generate_latency_ms_bucket{cluster="testing",worker="",le="60000"} 0
+velox_hive_file_handle_generate_latency_ms_bucket{cluster="testing",worker="",le="70000"} 0
+velox_hive_file_handle_generate_latency_ms_bucket{cluster="testing",worker="",le="80000"} 0
+velox_hive_file_handle_generate_latency_ms_bucket{cluster="testing",worker="",le="90000"} 0
+velox_hive_file_handle_generate_latency_ms_bucket{cluster="testing",worker="",le="100000"} 0
+velox_hive_file_handle_generate_latency_ms_bucket{cluster="testing",worker="",le="+Inf"} 0
+```
 
-#### Use Prometheus-CPP:
+Summaries
+```
+# TYPE presto_cpp_http_client_presto_exchange_source_on_body_bytes_summary summary
+presto_cpp_http_client_presto_exchange_source_on_body_bytes_summary_count{cluster="testing",worker=""} 0
+presto_cpp_http_client_presto_exchange_source_on_body_bytes_summary_sum{cluster="testing",worker=""} 0
+presto_cpp_http_client_presto_exchange_source_on_body_bytes_summary{cluster="testing",worker="",quantile="0.5"} Nan
+presto_cpp_http_client_presto_exchange_source_on_body_bytes_summary{cluster="testing",worker="",quantile="0.9"} Nan
+presto_cpp_http_client_presto_exchange_source_on_body_bytes_summary{cluster="testing",worker="",quantile="0.95"} Nan
+presto_cpp_http_client_presto_exchange_source_on_body_bytes_summary{cluster="testing",worker="",quantile="0.99"} Nan
+presto_cpp_http_client_presto_exchange_source_on_body_bytes_summary{cluster="testing",worker="",quantile="1"} Nan
+# TYPE presto_cpp_presto_exchange_source_serialized_page_size_summary summary
+presto_cpp_presto_exchange_source_serialized_page_size_summary_count{cluster="testing",worker=""} 0
+presto_cpp_presto_exchange_source_serialized_page_size_summary_sum{cluster="testing",worker=""} 0
+presto_cpp_presto_exchange_source_serialized_page_size_summary{cluster="testing",worker="",quantile="0.5"} Nan
+presto_cpp_presto_exchange_source_serialized_page_size_summary{cluster="testing",worker="",quantile="0.9"} Nan
+presto_cpp_presto_exchange_source_serialized_page_size_summary{cluster="testing",worker="",quantile="0.95"} Nan
+presto_cpp_presto_exchange_source_serialized_page_size_summary{cluster="testing",worker="",quantile="0.99"} Nan
+presto_cpp_presto_exchange_source_serialized_page_size_summary{cluster="testing",worker="",quantile="1"} Nan
+```
+
+#### Serialize using custom interface
+By default, we shall implement JSON and Prometheus Data Model serialization of metrics. We shall expose a new Serialization interface that users can implement to customize serialization.
+Pros: In-house and no external dependencies.
+Cons: It could be challenging to keep it in sync with Prometheus data model versions.
+      Adding support for histogrma quantiles is not simple.
+
+#### Serializing using Prometheus-CPP:
 Pros: Popular and simplifies histogram and summary metric maintenance.
+      The library has implemented unit tests and integration tests for serialization and data correctness.
 Cons: External dependency.
 
+Both of these approaches are prototyped in [this PR](https://github.com/prestodb/presto/pull/21599/files#).
 
 ## Configuration
+Currently, we have `runtime-metrics-collection-enabled` configuration property in Native Presto, which when set to true, starts recording metrics.
+Also, proposing a compile to time config PRESTO_ENABLE_PROMETHEUS, which when turned ON, inlcudes prometheus-metrics directory and registers
+PrometheusReporter as the metrics reporter.
 
 
-## Test Plan
+## Test Plan (TBD)
+1. Circle ci job that launches prestissimo
