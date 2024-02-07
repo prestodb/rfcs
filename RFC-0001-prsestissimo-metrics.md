@@ -3,7 +3,8 @@
 ## Proposers
 
 * Ahana, an IBM company.
-
+* Uber.
+  
 ## Prototype PR
 There are two approaches in this PR:https://github.com/prestodb/presto/pull/21599 which will be discussed in detail.
 
@@ -135,7 +136,11 @@ To keep it simple, the prestissimo worker will behave like an exporter and expos
 
 **A sidecar metric exporter:**
 A sidecar HTTP server that fetches metrics from Prestissimo. This would require launching as a child process of Prestissimo or as a separate container in the same POD as Prestissimo.
-Either way, this would take additional resources on the node which we would rather use for Query processsing.
+Pros: In case of Prestissimo crash, we still have a way to get the last set of metrics from the node.
+      To support graceful failure handling, we may have to dump metrics to disk and the exporter must read from disk when Prestissimo is down.
+Cons: Spawning a new process as a sidecar would take additional memory and CPU.
+
+Currently, we have only prototyped Prestissimo as exporter. Both approaches can be built using the prometheus-cpp library.
 
 ### Storing metric values in BaseStatsReporter:
 #### Memory footprint
@@ -233,7 +238,11 @@ Cons: External dependency.
 Both of these approaches are prototyped in [this PR](https://github.com/prestodb/presto/pull/21599/files#).
 
 ## Configuration
-Currently, we have `runtime-metrics-collection-enabled` configuration property in Native Presto, which when set to true, starts recording metrics.
+Runtime configs:
+1. Currently, we have `runtime-metrics-collection-enabled` configuration property in Native Presto, which when set to true, starts recording metrics.
+2. (TBD) Configs to optinally enable histogram/summary type metrics which may not be useful for day to day monitoring.
+3. (TBD) Mechanism to white list metrics.
+Compile time configs:
 Also, proposing a compile to time config PRESTO_ENABLE_PROMETHEUS, which when turned ON, inlcudes prometheus-metrics directory and registers
 PrometheusReporter as the metrics reporter.
 
