@@ -14,15 +14,15 @@ Also, discuss a general way to capture and serialize metrics to any custom forma
 
 ## Background
 ### Velox runtime metrics:
-Velox (the C++ query engine) defines a set of runtime metrics to record events that give insights into worker health
+Velox (the C++ runtime framework) defines a set of runtime metrics to record events that give insights into worker health
 status like CPU, memory, cache hits etc. Velox exposes the BaseStatsReporter interface to capture these runtime metrics.
-It is users’ responsibility to capture these runtime events for monitoring purposes. The Velox system defines the
+It is applications’ responsibility to capture these runtime events for monitoring purposes. The Velox system defines the
 following types of metrics: Count, Sum, Avg, Rate and Histogram. Refer this document: [Velox Runtime metrics](https://github.com/facebookincubator/velox/blob/main/velox/docs/metrics.rst) for a
 complete list of supported Velox runtime metrics and their definitions. There are a total of **28 metrics** as of Jan 2024
 declared [here](https://github.com/facebookincubator/velox/blob/main/velox/common/base/Counters.h) in the Velox code.
 
 ### PrestoCPP Counters:
-Prestissimo (the C++ Presto Worker) also defines worker related Prestissimo Counters [here](https://github.com/prestodb/presto/blob/master/presto-native-execution/presto_cpp/main/common/Counters.h). There are **102 counters**
+In addition to Velox metrics, Prestissimo (the C++ Presto Worker) also defines worker related Prestissimo Counters [here](https://github.com/prestodb/presto/blob/master/presto-native-execution/presto_cpp/main/common/Counters.h). There are **102 counters**
 defined as of Jan 2024. These metrics are periodically reported using the BaseStatsReporter interface as well.
 Additionally, Velox exposes the following interfaces to capture task or expression completion events:
 
@@ -63,12 +63,24 @@ To record values against the registered metrics, users invoke **RECORD_METRIC_VA
 
 1. **COUNT:** RECORD_METRIC_VALUE calls on COUNT type STAT usually don't mention a value in the call parameters, in which case we continuously increment it by 1 and maintain the state. When there is a value passed down, then the counter is incremented by that value. Count type metrics are expected to grow with time and only reset on application restart. Example of such metrics are number of http requests, total number of http requests that errored etc.
 
-2. **SUM:** This STAT type can be assigned to metrics which track aggregate of Operator specific counters. For instance, Velox defines a metric called `velox.spill_input_bytes`. This is a global metric tracking the total spill input bytes across all operators at that instant. Each `Operator` that needs to spill to disk maintains a `Spiller` instance which also has a `SpillStats` member. This instance of SpillStats only tracks Operator specific events. Every time an Operator’s spill stat is updated, in this case, the spill_input_bytes, a Operator thread level counter, is updated as well. At the time of reporting, the sum of `spill_input_bytes` across all threads is gathered and only report the change since the last time aggregated. Note that thread level spill_input_bytes increase with time, they are not reset when an Operator finishes. So, the delta computed at global level across all threads is positive.
+2. **SUM:** Tracks the sum of the inserted values. This STAT type can be assigned to metrics which track aggregate of Operator specific counters. For instance, Velox defines a metric called `velox.spill_input_bytes`. This is a global metric tracking the total spill input bytes across all operators at that instant. Each `Operator` that needs to spill to disk maintains a `Spiller` instance which also has a `SpillStats` member. This instance of SpillStats only tracks Operator specific events. Every time an Operator’s spill stat is updated, in this case, the spill_input_bytes, a Operator thread level counter, is updated as well. At the time of reporting, the sum of `spill_input_bytes` across all threads is gathered and only report the change since the last time aggregated. Note that thread level spill_input_bytes increase with time, they are not reset when an Operator finishes. So, the delta computed at global level across all threads is positive.
 
-3. **AVG:** This stat type can be assigned to counters that grow or decay with time. For instance System or user CPU utilization, System or User memory usage.
-
-4. **HISTOGRAMS:** This stat type is a summary of an event over a period of time. Histograms consists of buckets as keys which represent ranges for a metric and values are the counts representing the number of times the metric was recorded in that range. For instance:
-
+3. **AVG:** Tracks the average of the inserted values. This stat type can be assigned to counters that grow or decay with time. For instance System or user CPU utilization, System or User memory usage.
+4. **RATE**: Tracks the sum of the inserted values per second. As of now, there are no references to this `StatType` in the Velox repo.
+4. **HISTOGRAMS:** This stat type is a summary of an event over a period of time. Histograms consists of buckets as keys which represent ranges for a metric and values are the counts representing the number of times the metric was recorded in that range. For instance, `kCounterHttpClientPrestoExchangeOnBodyBytes` is a histogram with min value 0 and max value 1000000. The size of each bucket is is 1000, this Histogram will have `(max -min)/bucket-size = (1000000 - 0)/1000 = 1000` buckets. The parameters following the max value are {50,90,95,99,100} which
+indicate that this Histogram metric tracks 50th, 90th etc. percentiles respectively.
+```
+EFINE_HISTOGRAM_METRIC(
+      kCounterHttpClientPrestoExchangeOnBodyBytes,
+      1000,
+      0,
+      1000000,
+      50,
+      90,
+      95,
+      99,
+      100);
+```
 ### Current Reporting Flow
 
 #### Event driven metrics reporting (Blocking Call)
@@ -150,7 +162,7 @@ Since we overwrite metrics in our current design, it is likely that Prometheus m
 On other hand, we can maintain a list of metric values and timestamps seen so far in Prestissimo and in the response to the Prometheus we can include this <timestamp, value> pairs. Prometheus must be configured to honor these timestamps. But this approach is not recommended.
 
 ### Serialization Format (TBD)
-#### Prometheus Data model
+#### [Prometheus Data model](https://prometheus.io/docs/concepts/data_model/)
 We need to define metric labels which are used at Prometheus client end to filter metrics. For instance, a simple label in our case could be cluster name and worker IP. Since metrics are coming from each worker, we need a way to isolate and monitor them. For cluster name, we are relying on the `node.environment` config property and for worker IP, we are relying on the `HOSTNAME` environment variable. Here is a sample of metrics formatted using this data model.
 Counter
 ```
@@ -169,7 +181,7 @@ presto_cpp_mapped_memory_bytes{cluster="testing",worker="Local"} 806912
 # TYPE presto_cpp_os_system_cpu_time_micros gauge
 presto_cpp_os_system_cpu_time_micros{cluster="testing",worker="Local"} 2218
 ```
-Histogram
+Histogram, refer [this](https://prometheus.io/docs/practices/histograms/) documentation for detailed explanation.
 ```
 # TYPE velox_hive_file_handle_generate_latency_ms histogram
 velox_hive_file_handle_generate_latency_ms_count{cluster="testing",worker=""} 0
