@@ -19,7 +19,7 @@ RFCs are located in their own repository.
 To create one:
 
 1. Fork the https://github.com/prestodb/rfcs repository
-2. Copy the template file `RFC-0000-template.md` to `RFC-00xx-your-feature.md` and fill it out with your proposal.
+2. Copy the template file `RFC-0000-template.md` to `RFC-your-feature.md` and fill it out with your proposal.
    The template is a guideline. Feel free to add sections as appropriate.
 3. The RFC may simply link to another editor, like a Google Docs file, but please ensure that the
    document is publicly visible.  This can make the RFC easier to edit, but commenting doesn’t scale very well, so
@@ -27,7 +27,7 @@ To create one:
 
 ## Step 2: Get Feedback on the RFC
 1. Submit a pull request [to the main repository](https://github.com/prestodb/rfcs) from your fork titled 
-`RFC-00xx-your-feature.md`
+`RFC-your-feature.md`
 2. Before your PR is ready for review,
    [mark the PR as draft](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/changing-the-stage-of-a-pull-request#converting-a-pull-request-to-a-draft).
 3. Once it’s ready for review, [move the PR out of draft](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/proposing-changes-to-your-work-with-pull-requests/changing-the-stage-of-a-pull-request#marking-a-pull-request-as-ready-for-review).
