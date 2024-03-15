@@ -28,13 +28,13 @@ partition is mutated.
 ## Background
 
 Queries can produce lists of row IDs that can be saved and used as input to
-future queries for quick selection. A list of row IDs can be used include or
-exclude rows to form a subset from a table.
+future queries for quick selection. A list of row IDs can be used to include or
+exclude rows in way that identifies a subset of a table.
 
 ### Goals
 
 Row IDs resolve to the same value across compute engines. In this way they can
-be used as a strong-equality comparison across compute engines.
+be used for strong-equality comparison across compute engines.
 
 ### Non-goals
 
@@ -53,11 +53,12 @@ The exact format of the row ID is connector specific and not constrained by this
 RFC. It might change from one warehouse to the next if different warehouses use
 different metatdata servers to supply the partition half of a row ID.
 
-The metadata server (e.g. Hive Metastore) supplies the partition component in
+The metadata server (for example, Hive Metastore) supplies the partition component in
 the same way it supplies all the other information in the `Partition` object.
 Typically this involves a network call to the server which returns a Thrift
 object. The fields of the Thrift object are deserialized and loaded into a
-`Partition` object.
+`Partition` object. One of these fields is a byte array containing the
+"row ID partition component".
 
 When a connector reads rows from a file, it passes this partition component to
 the reader. Assuming the SQL query explicitly references the `$row_id`
@@ -71,8 +72,8 @@ the reader can use to construct a row ID from the row number and the row group.
 ## Adoption Plan
 
 This should be completely ignorable for all existing clients that use Presto.
-Everything is API compatible, and any SQL queries that don't access a column
-named `$row_id` will be unaffected.
+Everything is API compatible, and no table or SQL query should have a column named
+`$row_id` (or anything else that begins with a dollar sign).
 
 ## Test Plan
 
