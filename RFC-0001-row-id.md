@@ -1,6 +1,6 @@
 # **RFC 1 for Presto**
 
-## Row ID
+## Row ID for Hive
 
 Proposers
 
@@ -44,8 +44,9 @@ Comparison and sorting of row IDs.
 
 A row ID is a VARBINARY pseudo-column, also known as a hidden column. Each row
 will have a unique value that can be compared for equality, byte by byte. The
-type is not orderable. In SQL queries this will have the name `$row_id` and the
-type ROW_ID, a new built-in type. The complete row ID will have two components,
+type is not orderable. In SQL queries this will have the name `$row_id` and
+the type `VARBINARY`. In Java it will have the type `SQLVarBinary`.
+The complete row ID will have two components,
 the first to identify a row within a partition and the second to identify the
 partition within the warehouse.
 
@@ -53,27 +54,27 @@ The exact format of the row ID is connector specific and not constrained by this
 RFC. It might change from one warehouse to the next if different warehouses use
 different metatdata servers to supply the partition half of a row ID.
 
-The metadata server (for example, Hive Metastore) supplies the partition component in
-the same way it supplies all the other information in the `Partition` object.
+The metadata server (for example, Hive Metastore) supplies the partition component
+in the same way it supplies all the other information in the `Partition` object.
 Typically this involves a network call to the server which returns a Thrift
 object. The fields of the Thrift object are deserialized and loaded into a
 `Partition` object. One of these fields is a byte array containing the
-"row ID partition component".
+"row ID partition component". This byte array will be passed down the chain into a
+`HiveSplit` and eventually into a `PageSource`.
 
-When a connector reads rows from a file, it passes this partition component to
-the reader. Assuming the SQL query explicitly references the `$row_id`
-pseudo-column, the reader constructs a unique row component for each row from
-the row number and the row group. It concatenates this row component with the
-partition component and returns the combined value as the `$row_id` field.
-Possibly instead of passing the partition component directly, it passes a function
-the reader can use to construct a row ID from the row number and the row group.
-
+If the SQL query explicitly references the `$row_id`
+pseudo-column, when a page source reads rows from a file, it sets `appendRowNumber` to true 
+so it receives row numbers from the reader. Then the page source coerces the 
+row number block (type `long`) into a row ID block (type `SqlVarBinary`) by concatenating
+the bytes of the row number, the row group ID, and the partition ID into a single 
+blob.
 
 ## Adoption Plan
 
 This should be completely ignorable for all existing clients that use Presto.
 Everything is API compatible, and no table or SQL query should have a column named
-`$row_id` (or anything else that begins with a dollar sign).
+`$row_id` (or anything else that begins with a dollar sign that is not a documented
+Presto pseudo-column).
 
 ## Test Plan
 
