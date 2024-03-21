@@ -1,4 +1,4 @@
-# **RFC 1 for Presto**
+# **RFC 2 for Presto**
 
 ## Row ID for Hive
 
