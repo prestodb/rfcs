@@ -1,6 +1,6 @@
 # **RFC 2 for Presto**
 
-## Row ID for Hive
+## Hive Row IDs
 
 Proposers
 
