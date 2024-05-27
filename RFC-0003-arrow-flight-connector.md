@@ -5,6 +5,7 @@
 Proposers
 
 * Elbin Pallimalil
+* Ashwin Krishna Kumar
 
 ## [Related Issues]
 
@@ -70,6 +71,39 @@ Flight descriptor will be created from a command of byte array. The concrete imp
 #### Class diagram
 
 ![Class diagram](arrow-flight-connector/Class-diagram.png)
+
+
+## Prestissimo Implementation
+A single Prestissimo connector will handle all concrete instances of the Java Arrow Flight connector. This is possible because the prestissimo connector does not have to deal with metadata fetch and discovery. Each split wraps a ticket and a list of locations, which is all[^1] that is required to fetch data from the Flight Service in an implementation-agnostic way.
+
+[^1]: Authentication is one exception which cannot be handled in a truly generic manner. A solution is proposed below.
+
+### Arrow Record Batch to Velox vectors
+Arrow arrays and Velox vectors binary compatible with the Arrow C Data Interface.
+- Velox provides bridge methods to convert Velox vectors to-and-from from the C Interface [(Link)](https://github.com/facebookincubator/velox/blob/main/velox/vector/arrow/Bridge.h)
+- The Arrow SDK provides bridge method to convert Arrow arrays to-and-from the C Interface [(Link)](https://arrow.apache.org/docs/cpp/api/c_abi.html)
+
+The Arrow Flight SDK returns data in the form of Arrow Arrays, which can be converted into Velox vectors by using the provided bridge methods, using the Arrow C Interface as an intermediate representation. In most cases, these are cheap operations that don't involve copying or translating the actual data buffers.
+
+### Plugin-style authentication
+The worker needs to authenticate with the Flight server to redeem the Flight Ticket. This cannot be handled in a truly generic manner since the Arrow Flight protocol allows a lot of freedom to implement custom authentication strategies. Each implementaion of a flight service may require custom code to handle authentication.
+
+We propose to solve this by adding plugin-style authenticators to the prestissimo connectors. A Flight catalog can optionally specify an authenticator to use:
+```properties
+connector.name=arrow-flight
+flight.auth.name=simple-user-pass
+
+# The following are examples of authenticator-specific properties
+# In presto, the concrete module should handle them
+# In prestissimo, the authenticator plugin will handle them
+flight.auth.user=me
+flight.auth.password=itsme
+```
+In the above case, the authenticator registered as `simple-user-pass` will be used to authenticate all Flight requests for that catalog. More authenticators can be created and registered using an interface similar to the interface for connector creation and registration in Velox.
+
+### Conenctor registration
+All concrete implementations of the presto connector will map to the same connector in prestissimo. For example, assume there are two concrete implementaitons of the base module in Java - `arrow-flight-ibm` and `arrow-flight-sql`. In this case, `connector.name` values of `arrow-flight`, `arrow-flight-ibm`, `arrow-flight-sql` would all reference the same connector implementation in prestissimo.
+
 
 ## [Optional] Other Approaches Considered
 
