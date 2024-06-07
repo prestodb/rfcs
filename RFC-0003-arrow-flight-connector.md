@@ -35,7 +35,7 @@ The Arrow Flight libraries provide a development framework for implementing a se
 
 1. Create a Flight Client using the host, port, ssl information of the Flight service. 
     1. Maintain a connection pool of Flight clients.
-    2. Reuse a Flight client from the pool that is already connected to the same location as the new connection.
+    2. Reuse a Flight client from the pool that is already connected to the same location.
     3. Evict connections from the pool using the Least Frequently Used strategy.
 2. Use the Flight Client to connect to the Flight service. 
 3. Create a FlightDescriptor using a command
