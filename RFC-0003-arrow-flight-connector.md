@@ -85,8 +85,14 @@ Arrow arrays and Velox vectors binary compatible with the Arrow C Data Interface
 
 The Arrow Flight SDK returns data in the form of Arrow Arrays, which can be converted into Velox vectors by using the provided bridge methods, using the Arrow C Interface as an intermediate representation. In most cases, these are cheap operations that don't involve copying or translating the actual data buffers.
 
+### Serialization of Tickets and Locations
+
+- Ticket: Represented as a `byte[]` in Java and `std::string` in C++. Jackson serializes `byte[]` objects as a base64-encoded string. The encoding/decoding is implicit in the Java implementation, but needs to be decoded explicitly in the C++ worker.
+
+- Location: Represented as a `List<String>` in Java and `std::vector<std::string>` in C++. Serialization is handled entirely by existing the structures.
+
 ### Plugin-style authentication
-The worker needs to authenticate with the Flight server to redeem the Flight Ticket. This cannot be handled in a truly generic manner since the Arrow Flight protocol allows a lot of freedom to implement custom authentication strategies. Each implementaion of a flight service may require custom code to handle authentication.
+The worker needs to authenticate with the Flight server to redeem the Flight Ticket. This cannot be handled in a truly generic manner since the Arrow Flight protocol allows a lot of freedom to implement custom authentication strategies. Each implementation of a flight service may require custom code to handle authentication.
 
 We propose to solve this by adding plugin-style authenticators to the prestissimo connectors. A Flight catalog can optionally specify an authenticator to use:
 ```properties
@@ -101,8 +107,10 @@ flight.auth.password=itsme
 ```
 In the above case, the authenticator registered as `simple-user-pass` will be used to authenticate all Flight requests for that catalog. More authenticators can be created and registered using an interface similar to the interface for connector creation and registration in Velox.
 
-### Conenctor registration
-All concrete implementations of the presto connector will map to the same connector in prestissimo. For example, assume there are two concrete implementaitons of the base module in Java - `arrow-flight-ibm` and `arrow-flight-sql`. In this case, `connector.name` values of `arrow-flight`, `arrow-flight-ibm`, `arrow-flight-sql` would all reference the same connector implementation in prestissimo.
+`FlightConnector` and `FlightDataSource` store a pointer to the `Authenticator` object to use. There is no need to specialize these classes for handling authentication.
+
+### Connector registration
+All concrete implementations of the presto connector will map to the same connector in prestissimo. For example, assume there are two concrete implementations of the base module in Java - `arrow-flight-ibm` and `arrow-flight-sql`. In this case, `connector.name` values of `arrow-flight`, `arrow-flight-ibm`, `arrow-flight-sql` would all reference the same connector implementation in prestissimo.
 
 
 ## [Optional] Other Approaches Considered
