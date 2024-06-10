@@ -107,6 +107,10 @@ flight.auth.password=itsme
 ```
 In the above case, the authenticator registered as `simple-user-pass` will be used to authenticate all Flight requests for that catalog. More authenticators can be created and registered using an interface similar to the interface for connector creation and registration in Velox.
 
+The authenticator plugin can read credentials from:
+- The catalog configuration file.
+- Any `extraCredentials` passed by the client. This would allow the Flight data source to separately authenticate each user of the presto cluster without necessarily providing the same level of access to each user.
+
 `FlightConnector` and `FlightDataSource` store a pointer to the `Authenticator` object to use. There is no need to specialize these classes for handling authentication.
 
 ### Connector registration
