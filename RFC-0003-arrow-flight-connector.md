@@ -19,7 +19,7 @@ Create a base Arrow Flight module in Presto which can be extended to create an A
 
 Apache Arrow Flight is a new general-purpose client-server framework that simplifies high performance transport of large datasets over network interfaces. https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/
 
-Presto currently supports different datasources through connectors for each type of datasource. The connectors can use JDBC or some other protocol for datasource connection. If we use Flight client to connect to the different datasources we can improve the performance of the datasource connection. Also we would only need to develop one Flight connector that can be used across different datasources instead of developing individual connectors for each type of datasource.
+Presto currently supports different datasources through connectors for each type of datasource. The connectors can use JDBC or some other protocol for datasource connection. If we use Flight client to connect to the different datasources we can improve the performance of the datasource connection. 
 
 ## Proposed Implementation
 
