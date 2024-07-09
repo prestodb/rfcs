@@ -1,21 +1,25 @@
-# **RFC0 for Presto**
+# **RFC-0004-jdbc-join-pushdown for Presto**
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for instructions on creating your RFC and the process surrounding it.
 
-## [Title]
+## Jdbc join pushdown template in presto
 
 Proposers
 
-*
-*
+* Ajas M M
+
 
 ## [Related Issues]
 
-Related issues may include Github issues, PRs or other RFCs.
+https://github.com/prestodb/presto/issues/23152
 
 ## Summary
 
-Briefly describe what you intend to propose
+When presto identifies a join query which is specific to a Jdbc remote datasource, it split the join query into multiple select query based on the tables involved in the join query and select all the records from each tables using the jdbc connector without passing the join condition. Then the results of these sub-queries are fetched into the presto workers, additional operations such as filters, joins, sorts are applied before sending back to the user.
+
+If we  "Push down" or send these joins which involves same catalog/remote datasource as part of the  SQL  to the remote data source it increase the performance 3x to 10x.
+
+
 
 ## Background
 
