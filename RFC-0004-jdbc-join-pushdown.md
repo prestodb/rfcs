@@ -35,19 +35,11 @@ We did a poc by changing the presto generated PlanNode to handle jdbc join pushd
 
 ## Proposed Implementation
 
-How do you intend to implement the feature? This section can be as detailed as possible with large subsections of its own, or may be a few sentences depending on the scope of the feature proposed. Explain the design in enough detail for existing users/contributors to understand. Design should include all the corner cases you can think of. Feel free to include any new SPI method signatures, class hierarchies or system contracts here. It is recommended to mention any methods, variables, classes, or SQL language additions which you think are needed to provide a broader view of the code changes. Please mention/describe the below on a high level -
-
-1. What modules are involved
-2. Any new terminologies/concepts/SQL language additions
-3. Method/class/interface contracts which you deem fit for implementation.
-4. Code flow using bullet points or pseudo code as applicable
-5. Any new user facing metrics that can be shown on CLI or UI.
-
 If presto get a join query which is trying to join tables from same datasource or from different datasource, it is receiving as a string for mated sql query. Using presto parser and analyser, presto validate the syntax and converted to Query (Statement) object. This Query object is converted to presto internal referance architecture called Plan, using its logical and physical optimizers. Finally this plan is executed by the executor. 
 
 Currently for the join query, presto create a final plan which contains seperate TableScanNode for each table that participated on join query and this TableScanNode info is used by the connector to create the select query. On top of this select query result, presto apply join condition and other predicate to provide the final result.
 
-In the proposed implementation, while performing the logical optimization, instead of creating seperate TableScanNode for each table, it uses a new single TableScanNode for hold all the table details which sattisfied the "JoinPushdown condition" (explaine below) in the join query. This new TableScanNode also hold join criteria for that "JoinPushdown condition" satisfied tables. Using this new TableScanNode it build join query at connect level and return the join result to presto. Now the further predicate which was not pushed down to connector level will apply on the result by the presto and return final result.
+In the proposed implementation, while performing the logical optimization, instead of creating seperate TableScanNode for each table, it uses a new single TableScanNode for hold all the table details which sattisfied the "JoinPushdown condition" (JoinPushdown condition pointed below) in the join query. This new TableScanNode also hold join criteria for that "JoinPushdown condition" satisfied tables. Using this new TableScanNode it build join query at connect level and return the join result to presto. Now the further predicate which was not pushed down to connector level will apply on the result by the presto and return the final result.
 
 #### The JoinPushdown condition
 
@@ -55,6 +47,18 @@ In the proposed implementation, while performing the logical optimization, inste
  2. Join clause: Join condition should be from same connectors table
  3. Pushdown flag: A global setting is there for enable JdbcJoinPushdown
  4. Filter Criteria: The filter criteria should be able to pushing down to Jdbc, if there is a filter on JoinQuery.
+
+
+## Highlevel Design
+
+In presto, on Logical planning it converting the Query object  to  Presto Object called PlanNode by using the parser and analyser. In Physical planning this PlanNode passes through different logical and Physical optimiser - Rules, to optimize the PlanNode and to create the final Plan object.
+
+Basically the PlanNode or the Plan is a tree datastructure which represent the sql query, and is able to understand and process by presto. When a join Query received on logical planning, presto create a PlanNode with JoinNode. JoinNode is a tree structure which can hold another node, left and right table details, join conditions, projections and filter details related to that join query. If there are multiple tables to join then it create a join tree structure where the left side of the JoinNode will be another JoinNode which hold sub joins to resolve multiple table.  The logical PlanNode is created in such a way, where the first table (which is the from clause table) is resolved first either from the left TableScanNode or from JoinNode hierarchy using left dept first algorithm, then its adjacent table (very next table) as right side.  So the order and position of the tables in the join query plays an important role to determine query pushdown. Below is the example of PlanNode that created for the join query.
+
+
+![PlanNode_structure](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/8def675d-e122-4009-b06d-9faf141ad973)
+
+
 ## [Optional] Metrics
 
 How can we measure the impact of this feature?
