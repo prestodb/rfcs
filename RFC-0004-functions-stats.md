@@ -1,11 +1,11 @@
 # **RFC0004 for Presto**
 
-## Capture statistics for SCALAR functions/UDF
+## Propagate statistics for SCALAR functions
 
 Proposers
 
-* Anant Aneja (@aaneja)
 * Prashant Sharma (@ScrapCodes)
+* Anant Aneja (@aaneja)
 
 ## [Related Issues]
 
@@ -13,34 +13,19 @@ Proposers
 2. https://github.com/prestodb/presto/issues/19356
 
 
-Related issues may include GitHub issues, PRs or other RFCs.
-
 ## Summary
+Provide a set of annotations for the scalar functions to specify how input statistics are transformed due to application of the function.
 
-Provide an easy and backwards compatible way for the Presto SCALAR functions(UDFs) to configure a callback or provide certain params via annotation
-to compute how a function impacts source statistics (.e.g distinct value count, null fraction etc...). SCALAR functions have certain 
-characteristics (e.g. they do not impact output row counts) which can be used to provide more options for stats calculation than just
-registering callback.
+A SCALAR function such as `upper(COLUMN1)` could be annotated with `propagateStatistics: true`, and would reuse source statistics of `COLUMN1`.
+Another example : `is_null(COLUMN1)` could be annotated with `distinctValueCount: 2`, `nullFraction: 0.0` and `avgRowSize: 1.0` and would have these stats values hardcoded
 
-A SCALAR function `upper(COLUMN1)` can be optimized if it could be annotated as `propagateStatistics: true` i.e. just reuse source statistics of `COLUMN1`.
-Another example is `is_null(COLUMN1)` can be optimized if it could be annotated as `distinctValueCount: 2`, `nullFraction: 0.0` and `avgRowSize: 1.0`.
-
-We can add a [special case]([ScalarStatsCalculator](https://github.com/prestodb/presto/blob/0.288-edge7/presto-main/src/main/java/com/facebook/presto/cost/ScalarStatsCalculator.java#L118))
-for each example as above or come up with something more general, the current codebase adds special case for functions `CAST(...)`, `is_null(Slice)`, and all arithmetic operators.
-This proposal discusses alternatives to adding special cases or heuristics for optimising scalar udfs or functions.
-
-If none of the parameters can fit a certain functions characteristic then it can use a user provided support function(or a callback) for determining
-function statistics.
-
-Finally, exact statistics cannot be known in advance e.g. the `distinctValueCount` for column will be different after applying `upper(Col1)` function,
-and it depends on the data. A closer estimate can be arrived at - by either using a stochastic approach or sampling.
 
 ## Background
+Currently, we compute new stats for only a handful of functions (`CAST(...)`, `is_null(Slice)`, arithmetic operators) by using a hand rolled implementation in [`ScalarStatsCalculator`](https://github.com/prestodb/presto/blob/0.288-edge7/presto-main/src/main/java/com/facebook/presto/cost/ScalarStatsCalculator.java#L118))
 
-The Presto optimizer cannot estimate statistics for UDFs since it is unaware of how source stats need to be transformed.
+For other functions the optimizer cannot estimate statistics since it is unaware of how source stats need to be transformed.
 [Related Issues](#related-issues) [1] and [2] are examples of queries we could have been optimized better if there was some way to 
-derive source stats. The current implementation simply applies 
-`?` or `VariableStatsEstimate.unknown()` i.e. unknown values for the PlanNode e.g.: 
+derive source stats. `VariableStatsEstimate.unknown()` is propgated for these stats (Shown below as `?` )
 
 ```
 presto:tpcds_sf1_parquet> explain select 1 FROM customer, customer_address WHERE c_birth_country = upper(ca_country);
@@ -76,77 +61,26 @@ presto:tpcds_sf1_parquet> explain select 1 FROM customer, customer_address WHERE
                                  c_birth_country := c_birth_country:varchar(20):14:REGULAR (1:23)      
 ```
 
-VariableStatsEstimate has the following fields.
-
-```java
-public class VariableStatsEstimate
-{
-    private static final VariableStatsEstimate UNKNOWN = new VariableStatsEstimate(NEGATIVE_INFINITY, POSITIVE_INFINITY, NaN, NaN, NaN);
-    private static final VariableStatsEstimate ZERO = new VariableStatsEstimate(NaN, NaN, 1.0, 0.0, 0.0);
-
-    // for now we support only types which map to real domain naturally and keep low/high value as double in stats.
-    private final double lowValue;
-    private final double highValue;
-    private final double nullsFraction;
-    private final double averageRowSize;
-    private final double distinctValuesCount;
-    private final ConnectorHistogram histogram;
- //   ...
-}
-
-```
-
-The functions like `CAST(COL)` and arithmetic operators are handled in a specialised way, their statistics are estimated as their characteristics
-are known in advance. 
-[ScalarStatsCalculator](https://github.com/prestodb/presto/blob/0.288-edge7/presto-main/src/main/java/com/facebook/presto/cost/ScalarStatsCalculator.java#L118)
-```java
-public class ScalarStatsCalculator
-{
-    //...
-    public VariableStatsEstimate visitCall(CallExpression call, Void context)
-    {
-        if (resolution.isNegateFunction(call.getFunctionHandle())) {
-            return computeNegationStatistics(call, context);
-        }
-
-        FunctionMetadata functionMetadata = metadata.getFunctionAndTypeManager().getFunctionMetadata(call.getFunctionHandle());
-        if (functionMetadata.getOperatorType().map(OperatorType::isArithmeticOperator).orElse(false)) {
-            return computeArithmeticBinaryStatistics(call, context);
-        }
-
-        RowExpression value = new RowExpressionOptimizer(metadata).optimize(call, OPTIMIZED, session);
-
-        if (isNull(value)) {
-            return nullStatsEstimate();
-        }
-
-        if (value instanceof ConstantExpression) {
-            return value.accept(this, context);
-        }
-
-        // value is not a constant but we can still propagate estimation through cast
-        if (resolution.isCastFunction(call.getFunctionHandle())) {
-            return computeCastStatistics(call, context);
-        }
-        return VariableStatsEstimate.unknown();
-    }
-}
-```
-A `function` or a `UDF` in general can not be optimized in the same way, because it's characteristics are not known. This proposal
-is aimed at bridging this gap.
+This proposal discusses alternatives to adding special cases for optimising scalar udfs or functions.
 
 
 ### Prior-Art
 
-* PostgreSQL: Allows the user to provide a support function which can compute either propagate/calculating stats.
-  e.g. https://www.postgresql.org/docs/15/xfunc-optimization.html . Postgresql refers to these
-  as `planner support functions` (postgresql/src/include/nodes/supportnodes.h).
+#### PostgreSQL
+PostgreSQL allows the user to provide a support function which can compute either propagate/calculating stats.
+e.g. https://www.postgresql.org/docs/15/xfunc-optimization.html . Postgresql refers to these
+as `planner support functions` (postgresql/src/include/nodes/supportnodes.h).
 
 
-* Apache spark:
+#### DuckDb
+DuckDb also allows the user to specify a similar helper function to transform source stats,
+see [duckdb#113](https://github.com/duckdb/duckdb/pull/1133/files#diff-0833c08516123b2a2b239dd25daabdf5a3b0da8c51e00fddbcfd7965c47bc4b6)
+
+
+#### Apache spark:
 
 Acc. https://jaceklaskowski.gitbooks.io/mastering-spark-sql/content/spark-sql-udfs-blackbox.html , spark treats UDFs as black box. 
-In the example below, Spark seems to propagate stats for even UDFs.
+In the example below, Spark seems to propagate stats for even UDFs (TODO : code citation needed)
 
 ```
 
@@ -231,19 +165,17 @@ Join Inner, NOT (firstname#299 = lastname#90)
 
 ### Goals
 
-1. Provide a mechanism for computing source statistics in queries involving presto SCALAR functions.
-2. Explore the currently available techniques by various DBMS to support this functionality.
-3. Provide a phased implementation plan and how this feature can be implemented.
-4. Provide a statistics comparison of impact on various queries.
+1. Provide a mechanism for transforming source statistics for scalar functions
+1. Show impact as plan changes for benchmark queries
 
 ### Non-goals
-1. Non-SCALAR functions.
-2. Providing runtime statistics.
-3. Give accurate stats by either sampling or applying a statistical technique.
+1. Non-SCALAR functions will not be annotated
+1. Runtime metrics to measure latency/CPU impact of performing these transformations
+1. Give accurate stats by either sampling or applying a statistical technique.
 
 ## Proposed Implementation
 
-We propose a phase wise implementation plan.
+We propose a phase wise implementation plan -
 
 * __Phase 1__.
 
@@ -404,7 +336,7 @@ Examples of using above annotations for various function in `StringFunctions.jav
 * __Future work__.
 
 The following example is a more powerful form of expressing how to estimate stats for functions based on their characteristics. Here,
-we propose the use of expressions ( of expression language with a limited grammer. ) In the following example of `substr` :
+we propose the use of expressions ( i.e an expression language with a fixed grammar ) In the following example of `substr` :
 For average row size we have used the value of length argument. For distinct values count it is more complex, e.g. if length is same as
 the upper bound for `varchar(x)` i.e. `x` , then use source stat `distinct values count` of the argument `utf8`. 
 ```java
