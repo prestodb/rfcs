@@ -2,7 +2,7 @@
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for instructions on creating your RFC and the process surrounding it.
 
-## Jdbc join pushdown template in presto
+## Jdbc join pushdown in presto
 
 Proposers
 
@@ -17,17 +17,21 @@ https://github.com/prestodb/presto/issues/23152
 
 When presto identifies a join query which is specific to a Jdbc remote datasource, it split the join query into multiple select query based on the tables involved in the join query and select all the records from each tables using the jdbc connector without passing the join condition. Then the results of these sub-queries are fetched into the presto workers, additional operations such as filters, joins, sorts are applied before sending back to the user.
 
-If we  "Push down" or send these joins which involves same catalog/remote datasource as part of the  SQL  to the remote data source it increase the performance 3x to 10x.
+If we  "Push down" or send these joins which involves on same catalog/remote datasource as part of the  SQL along with join condition to the remote data source it increase the performance 3x to 10x.
 
 
 
 ## Background
 
-Brief description of any existing issues, user requests or feature comparison with competitors which explains why the proposed feature might be needed. How the proposed feature helps our users? Explain the impact and value of this feature.
 
-### [Optional] Goals
 
-### [Optional] Non-goals
+This implementation is to address a performance limitation of Presto federation of SQLs of JDBC connector to remote data sources such as DB2, Postgres, Oracle etc. Currently, in Presto, we have predicate pushdown (WHERE condition pushdown) to some extent in JDBC connectors and not having any join pushdown or join condition pushdown capabilities. 
+
+This cause high performance impact on join queries and it is raised by some of our client. While comparing with competitors we also missing the Jdbc join pushdown capabilities.
+
+We did a poc by changing the presto generated PlanNode to handle jdbc join pushdown and it icreases the performance from 3x on postgres and  8x on db2 remote datasource. Now we need to perform its actual implemetation 
+
+
 
 ## Proposed Implementation
 
@@ -39,6 +43,18 @@ How do you intend to implement the feature? This section can be as detailed as p
 4. Code flow using bullet points or pseudo code as applicable
 5. Any new user facing metrics that can be shown on CLI or UI.
 
+If presto get a join query which is trying to join tables from same datasource or from different datasource, it is receiving as a string for mated sql query. Using presto parser and analyser, presto validate the syntax and converted to Query (Statement) object. This Query object is converted to presto internal referance architecture called Plan, using its logical and physical optimizers. Finally this plan is executed by the executor. 
+
+Currently for the join query, presto create a final plan which contains seperate TableScanNode for each table that participated on join query and this TableScanNode info is used by the connector to create the select query. On top of this select query result, presto apply join condition and other predicate to provide the final result.
+
+In the proposed implementation, while performing the logical optimization, instead of creating seperate TableScanNode for each table, it uses a new single TableScanNode for hold all the table details which sattisfied the "JoinPushdown condition" (explaine below) in the join query. This new TableScanNode also hold join criteria for that "JoinPushdown condition" satisfied tables. Using this new TableScanNode it build join query at connect level and return the join result to presto. Now the further predicate which was not pushed down to connector level will apply on the result by the presto and return final result.
+
+#### The JoinPushdown condition
+
+ 1. Table: left table and right table should be on same connector
+ 2. Join clause: Join condition should be from same connectors table
+ 3. Pushdown flag: A global setting is there for enable JdbcJoinPushdown
+ 4. Filter Criteria: The filter criteria should be able to pushing down to Jdbc, if there is a filter on JoinQuery.
 ## [Optional] Metrics
 
 How can we measure the impact of this feature?
