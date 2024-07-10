@@ -394,7 +394,7 @@ TODO: Open for now
 
 Current implementation will work for every JdbcConnector which use JdbcPlanOptimizerProvider as ConnectorPlanOptimizerProvider. It is noticed that some existing JdbcConnector not using JdbcPlanOptimizerProvider.
 
-During this task we are focusing on postgres and db2 connectors to do the join pushdown and now other connectors are out of scope .
+During this task we are focusing on postgres (for OSS) and db2 (for IBM) to do the join pushdown and now other Jdbc connectors are not testing .
 
 ## 10) Open Points
 
@@ -402,7 +402,9 @@ During this task we are focusing on postgres and db2 connectors to do the join p
 
 *) After JoinPushdown optimizer Explain and Analyze join query may show only one tablescannode. We may able to list all the tables on it .
 
-*) How we cover all test cases?
+*) How we cover all test cases
+
+*) Currently we planned to validate postgres (oss) connector and db2 (IBM) connector. Validation is required for all Jdbc Connector.
 
 ## [Optional] Other Approaches Considered
 
@@ -418,7 +420,8 @@ Based on the discussion, this may need to be updated with feedback from reviewer
 ## Test Plan
 
 - Unit tests can test the JdbcJoinPushdown capabilities by enabling 'enable-join-query-pushdowntesting' flag
-- Regrestion testing will do locally to validate all JoinSql
+- Regrestion testing will do locally to validate all sql for Postgres
+- Regrestion testing will do locally to validate all sql for IBM specific db2
 - We did a poc for join query with postgres, db2 and iceberg table.
     *) While pushing down the postgres join its performance is 3x
     *) While pushing down the db2 join its performance is 8x
