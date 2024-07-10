@@ -1,4 +1,4 @@
-![rule_repsent_samecatalog](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/410f14de-54c6-44c2-b43f-3cd82a94881b)# **RFC-0004-jdbc-join-pushdown for Presto**
+# **RFC-0004-jdbc-join-pushdown for Presto**
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for instructions on creating your RFC and the process surrounding it.
 
@@ -399,7 +399,9 @@ During this task we are focusing on postgres and db2 connectors to do the join p
 ## 10) Open Points
 
 *) Bushy Join
+
 *) After JoinPushdown optimizer Explain and Analyze join query may show only one tablescannode. We may able to list all the tables on it .
+
 *) How we cover all test cases?
 
 ## [Optional] Other Approaches Considered
