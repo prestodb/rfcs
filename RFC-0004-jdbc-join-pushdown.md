@@ -410,13 +410,17 @@ Based on the discussion, this may need to be updated with feedback from reviewer
 
 ## Adoption Plan
 
-- What impact (if any) will there be on existing users? Are there any new session parameters, configurations, SPI updates, client API updates, or SQL grammar?
-- If we are changing behaviour how will we phase out the older behaviour?
-- If we need special migration tools, describe them here.
-- When will we remove the existing behaviour, if applicable.
-- How should this feature be taught to new and existing users? Basically mention if documentation changes/new blog are needed?
-- What related issues do you consider out of scope for this RFC that could be addressed in the future independently of the solution that comes out of this RFC?
+- We are able to enable join pushdown for Jdbc Connectors using presto custom configuration enable-join-query-pushdown=true.
+- Currently presto is able to pushdown only one connector table. Pushing down multiple connector tables to jdbc level is out of scope for this RFC
+
+
 
 ## Test Plan
 
-How do we ensure the feature works as expected? Mention if any functional tests/integration tests are needed. Special mention for product-test changes. If any PoC has been done already, please mention the relevant test results here that you think will bolster your case of getting this RFC approved.
+- Unit tests can test the JdbcJoinPushdown capabilities by enabling 'enable-join-query-pushdowntesting' flag
+- Regrestion testing will do locally to validate all JoinSql
+- We did a poc for join query with postgres, db2 and iceberg table.
+    *) While pushing down the postgres join its performance is 3x
+    *) While pushing down the db2 join its performance is 8x
+
+
