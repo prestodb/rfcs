@@ -1,4 +1,4 @@
-![image](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/fa81ac7e-5c3f-4251-9a09-a4ed40358fea)# **RFC-0004-jdbc-join-pushdown for Presto**
+# **RFC-0004-jdbc-join-pushdown for Presto**
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for instructions on creating your RFC and the process surrounding it.
 
