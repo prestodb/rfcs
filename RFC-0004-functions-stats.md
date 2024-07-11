@@ -329,6 +329,98 @@ Examples of using above annotations for various function in `StringFunctions.jav
   }
 ```
 
+For C++ functions, `VectorFunctionMetadata` is expanded to include `constantStats` and
+`transformSourceStats` as follows.
+
+```c++
+
+struct VectorFunctionMetadata {
+  /// Boolean indicating whether this function supports flattening, i.e.
+  /// converting a set of nested calls into a single call.
+  ///
+  ///     f(a, f(b, f(c, d))) => f(a, b, c, d).
+  ///
+  /// For example, concat(string,...), concat(array,...), map_concat(map,...)
+  /// Presto functions support flattening. Similarly, built-in special format
+  /// AND and OR also support flattening.
+  ///
+  /// A function that supports flattening must have a signature with variadic
+  /// arguments of the same type. The result type must be the same as input
+  /// type.
+  bool supportsFlattening{false};
+
+  /// True if the function is deterministic, e.g given same inputs always
+  /// returns same result.
+  bool deterministic{true};
+
+  /// True if null in any argument always produces null result.
+  /// In this case, 'rows' in VectorFunction::apply will point only to positions
+  /// for which all arguments are not null.
+  bool defaultNullBehavior{true};
+
+  /// Constant stats produced by the function, NAN represent unknown values.
+  /// If constant stats are provided they take precedence over the results of
+  /// transformSourceStats
+  VectorFunctionStatistics constantStats;
+
+  /// transforms source stats vector to attain final function statistics.
+  std::function<VectorFunctionStatistics(std::vector<VectorFunctionStatistics>)>
+      transformSourceStats;
+};
+```
+Where `VectorFunctionStatistics` is  defined as follows :
+
+```c++
+struct VectorFunctionStatistics {
+  double lowValue{NAN};
+
+  double highValue{NAN};
+
+  double nullFraction{NAN};
+
+  double averageRowSize{NAN};
+
+  double distinctValuesCount{NAN};
+};
+
+```
+
+Examples for C++ functions:
+
+```c++
+  static exec::VectorFunctionStatistics computeConcatStats(
+      std::vector<exec::VectorFunctionStatistics> argsSourceStats) {
+    double sumAvgRowSize = NAN;
+    double sumNullFractions = NAN;
+    for (auto i = argsSourceStats.cbegin(); i != argsSourceStats.cend(); ++i) {
+      if (!isnan(i->nullFraction)) {
+        if (isnan(sumNullFractions)) {
+          sumNullFractions = i->nullFraction;
+        } else {
+          sumNullFractions += i->nullFraction;
+        }
+      }
+      if (!isnan(i->averageRowSize)) {
+        if (isnan(sumAvgRowSize)) {
+          sumAvgRowSize = i->averageRowSize;
+        } else {
+          sumAvgRowSize += i->averageRowSize;
+        }
+      }
+    }
+
+    return exec::VectorFunctionStatisticsBuilder()
+        .averageRowSize(sumAvgRowSize)
+        .nullFraction(sumNullFractions)
+        .build();
+  }
+  static exec::VectorFunctionMetadata metadata() {
+    return {.supportsFlattening = true,
+        .transformSourceStats = ConcatFunction::computeConcatStats
+    };
+  }
+```
+
 * __Phase 2__. Annotate some of the builtin scalar functions with above annotation.
 
 * __Phase 3__. Extend the support to non-built-in UDFs. Add documentations and blogs with usage examples.
