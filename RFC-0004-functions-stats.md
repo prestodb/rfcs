@@ -181,7 +181,7 @@ We propose a phase wise implementation plan -
 
  * Support builtin scalar functions stats propagation implementation for JAVA.
 
- * We plan to introduce following 2 Annotations i.e. `ScalarFunctionConstantStats` and `ScalarPropagateSourceStats` 
+ * We plan to introduce the following 2 Annotations i.e. `ScalarFunctionConstantStats` and `ScalarPropagateSourceStats` 
 in java with fields as follows:
 
 ```java
@@ -214,13 +214,13 @@ public @interface ScalarFunctionConstantStats
   double distinctValuesCount() default Double.NaN;
 
   /**
-   * Does this function produce a constant nullFraction, e.g. is_null(Slice) will alter column's null fraction
+   * The constant nullFraction of the resulting function. For example, is_null(<column>) should alter this value to 0.0
    * value to 0.0.
    */
   double nullFraction() default Double.NaN;
 
   /**
-   * An `avgRowSize`: does this function impacts the size of each row e.g. a function like md5 may produce a
+   * A constant representing the average output size per row from this function. For example, hash functions like md5 or SHA512 will always produce a constant-length output.
    * constant row size.
    */
   double avgRowSize() default Double.NaN;
