@@ -80,88 +80,8 @@ see [duckdb#113](https://github.com/duckdb/duckdb/pull/1133/files#diff-0833c0851
 #### Apache spark:
 
 Acc. https://jaceklaskowski.gitbooks.io/mastering-spark-sql/content/spark-sql-udfs-blackbox.html , spark treats UDFs as black box. 
-In the example below, Spark seems to propagate stats for even UDFs (TODO : code citation needed)
-
-```
-
-scala> spark.udf.register("spl_upper", (_: String).toUpperCase())
-res18: org.apache.spark.sql.expressions.UserDefinedFunction = SparkUserDefinedFunction($Lambda$4325/0x00007a599546f940@681a2cd2,StringType,List(Some(class[value[0]: string])),Some(class[value[0]: string]),Some(spl_upper),true,true)
-
-
-scala> spark.sql("select * from employee as e, employee2 as e2 where spl_upper(e2.firstname) != spl_upper(e.lastname)").explain(true);
-== Parsed Logical Plan ==
-'Project [*]
-+- 'Filter NOT ('spl_upper('e2.firstname) = 'spl_upper('e.lastname))
-+- 'Join Inner
-  :- 'SubqueryAlias e
-  :  +- 'UnresolvedRelation [employee], [], false
-+- 'SubqueryAlias e2
-  +- 'UnresolvedRelation [employee2], [], false
-
-== Analyzed Logical Plan ==
-firstname: string, middlename: string, lastname: string, id: string, gender: string, salary: int, firstname: string, middlename: string, lastname: string, id: string, gender: string, salary: int
-Project [firstname#88, middlename#89, lastname#90, id#91, gender#92, salary#93, firstname#275, middlename#276, lastname#277, id#278, gender#279, salary#280]
-+- Filter NOT (spl_upper(firstname#275) = spl_upper(lastname#90))
-+- Join Inner
-:- SubqueryAlias e
-  :  +- SubqueryAlias employee
-:     +- View (`employee`, [firstname#88,middlename#89,lastname#90,id#91,gender#92,salary#93])
-:        +- LogicalRDD [firstname#88, middlename#89, lastname#90, id#91, gender#92, salary#93], false
-+- SubqueryAlias e2
-+- SubqueryAlias employee2
-+- View (`employee2`, [firstname#275,middlename#276,lastname#277,id#278,gender#279,salary#280])
-+- LogicalRDD [firstname#275, middlename#276, lastname#277, id#278, gender#279, salary#280], false
-
-== Optimized Logical Plan ==
-Join Inner, NOT (spl_upper(firstname#275) = spl_upper(lastname#90))
-:- LogicalRDD [firstname#88, middlename#89, lastname#90, id#91, gender#92, salary#93], false
-+- LogicalRDD [firstname#275, middlename#276, lastname#277, id#278, gender#279, salary#280], false
-
-== Physical Plan ==
-  CartesianProduct NOT (spl_upper(firstname#275) = spl_upper(lastname#90))
-:- *(1) Scan ExistingRDD[firstname#88,middlename#89,lastname#90,id#91,gender#92,salary#93]
-+- *(2) Scan ExistingRDD[firstname#275,middlename#276,lastname#277,id#278,gender#279,salary#280]
-
-
-scala> spark.sql("select * from employee as e, employee2 as e2 where e2.firstname != e.lastname").explain(true);
-== Parsed Logical Plan ==
-'Project [*]
-+- 'Filter NOT ('e2.firstname = 'e.lastname)
-+- 'Join Inner
-  :- 'SubqueryAlias e
-  :  +- 'UnresolvedRelation [employee], [], false
-+- 'SubqueryAlias e2
-  +- 'UnresolvedRelation [employee2], [], false
-
-== Analyzed Logical Plan ==
-firstname: string, middlename: string, lastname: string, id: string, gender: string, salary: int, firstname: string, middlename: string, lastname: string, id: string, gender: string, salary: int
-Project [firstname#88, middlename#89, lastname#90, id#91, gender#92, salary#93, firstname#299, middlename#300, lastname#301, id#302, gender#303, salary#304]
-+- Filter NOT (firstname#299 = lastname#90)
-+- Join Inner
-:- SubqueryAlias e
-  :  +- SubqueryAlias employee
-:     +- View (`employee`, [firstname#88,middlename#89,lastname#90,id#91,gender#92,salary#93])
-:        +- LogicalRDD [firstname#88, middlename#89, lastname#90, id#91, gender#92, salary#93], false
-+- SubqueryAlias e2
-+- SubqueryAlias employee2
-+- View (`employee2`, [firstname#299,middlename#300,lastname#301,id#302,gender#303,salary#304])
-+- LogicalRDD [firstname#299, middlename#300, lastname#301, id#302, gender#303, salary#304], false
-
-== Optimized Logical Plan ==
-Join Inner, NOT (firstname#299 = lastname#90)
-:- Filter isnotnull(lastname#90)
-:  +- LogicalRDD [firstname#88, middlename#89, lastname#90, id#91, gender#92, salary#93], false
-+- Filter isnotnull(firstname#299)
-+- LogicalRDD [firstname#299, middlename#300, lastname#301, id#302, gender#303, salary#304], false
-
-== Physical Plan ==
-  CartesianProduct NOT (firstname#299 = lastname#90)
-:- *(1) Filter isnotnull(lastname#90)
-:  +- *(1) Scan ExistingRDD[firstname#88,middlename#89,lastname#90,id#91,gender#92,salary#93]
-+- *(2) Filter isnotnull(firstname#299)
-+- *(2) Scan ExistingRDD[firstname#299,middlename#300,lastname#301,id#302,gender#303,salary#304]
-
-```
+Code citation: [Spark does not have stats for functions](https://github.com/apache/spark/blob/v4.0.0-preview1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/statsEstimation/FilterEstimation.scala#L206)
+It has special casing for common operators: [code ref](https://github.com/apache/spark/blob/v4.0.0-preview1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/statsEstimation/FilterEstimation.scala#L142)
 
 ### Goals
 
@@ -196,6 +116,8 @@ in java with fields as follows:
  * parameters. This annotation does not cover all the possible cases and allows constant values for the following fields.
  * Value Double.NaN implies unknown.
  * </p>
+ * 
+ * Note: Constant stats takes precedence over all.
  */
 @Retention(RUNTIME)
 @Target(METHOD)
@@ -209,7 +131,7 @@ public @interface ScalarFunctionConstantStats
   HistogramTypes histogram() default HistogramTypes.UNKNOWN;
 
   /**
-   * Does this function produces a constant Distinct value count regardless of `input column`'s source stats.
+   * The constant distinct values count to be applied.
    */
   double distinctValuesCount() default Double.NaN;
 
@@ -234,7 +156,7 @@ public @interface ScalarFunctionConstantStats
 @Target(PARAMETER)
 public @interface ScalarPropagateSourceStats
 {
-    boolean propagateAllStats() default false;
+    boolean propagateAllStats() default true;
 
     StatsPropagationBehavior minValue() default StatsPropagationBehavior.UNKNOWN;
     StatsPropagationBehavior maxValue() default StatsPropagationBehavior.UNKNOWN;
@@ -261,7 +183,7 @@ public enum StatsPropagationBehavior
     /** Use the value of output row count. */
     ROW_COUNT,
     /** Use the value of row_count * (1 - null_fraction). */
-    ROW_COUNT_TIMES_INV_NULL_FRACTION,
+    NON_NULL_ROW_COUNT,
     /** use the value of TYPE_WIDTH in varchar(TYPE_WIDTH) */
     USE_TYPE_WIDTH_VARCHAR,
     /** Take max of type width of arguments with varchar type. */
@@ -279,7 +201,8 @@ Examples of using above annotations for various function in `StringFunctions.jav
     @ScalarFunction
     @LiteralParameters("x")
     @SqlType("varchar(x)")
-    public static Slice upper(@ScalarPropagateSourceStats(propagateAllStats = true) @SqlType("varchar(x)") Slice slice)
+    public static Slice upper(
+            @ScalarPropagateSourceStats @SqlType("varchar(x)") Slice slice)
     {
         return toUpperCase(slice);
     }
@@ -292,7 +215,7 @@ Examples of using above annotations for various function in `StringFunctions.jav
     @ScalarFunction("starts_with")
     @LiteralParameters({"x", "y"})
     @SqlType(StandardTypes.BOOLEAN)
-    @ScalarFunctionConstantStats(distinctValuesCount = 2, nullFraction = 0, minValue = 0, maxValue = 1)
+    @ScalarFunctionConstantStats(distinctValuesCount = 2, minValue = 0, maxValue = 1)
     public static Boolean startsWith(@SqlType("varchar(x)") Slice x, @SqlType("varchar(y)") Slice y)
     {
         if (x.length() < y.length()) {
@@ -311,19 +234,27 @@ Examples of using above annotations for various function in `StringFunctions.jav
     @LiteralParameters({"x", "y", "u"})
     @Constraint(variable = "u", expression = "x + y")
     @SqlType("char(u)")
-    public static Slice concat(@LiteralParameter("x") Long x,
-            @ScalarPropagateSourceStats(propagateAllStats = true, nullFraction = USE_MAX_ARGUMENT, avgRowSize = SUM_ARGUMENTS, distinctValuesCount = ROW_COUNT) @SqlType("char(x)") Slice left,
+    public static Slice concat(
+            @LiteralParameter("x") Long x,
+            @ScalarPropagateSourceStats(
+                    propagateAllStats = true,
+                    nullFraction = USE_MAX_ARGUMENT,
+                    avgRowSize = SUM_ARGUMENTS,
+                    distinctValuesCount = ROW_COUNT) @SqlType("char(x)") Slice left,
             @SqlType("char(y)") Slice right)
     { //...
 }
 ```
+
  __Propagate all stats but, for nullFraction, avgRowSize and distinctValuesCount follow as specified.__
 
 4. An example of using both `ScalarFunctionConstantStats` and `ScalarPropagateSourceStats`.
 ```java
     @ScalarFunctionConstantStats(minValue = 0)
     public static long levenshteinDistance(
-            @ScalarPropagateSourceStats(propagateAllStats = true, maxValue = MAX_TYPE_WIDTH_VARCHAR, distinctValuesCount = MAX_TYPE_WIDTH_VARCHAR) @SqlType("varchar(x)") Slice left,
+            @ScalarPropagateSourceStats(
+                    maxValue = MAX_TYPE_WIDTH_VARCHAR,
+                    distinctValuesCount = MAX_TYPE_WIDTH_VARCHAR) @SqlType("varchar(x)") Slice left,
             @SqlType("varchar(y)") Slice right){ 
     //... 
   }
@@ -361,17 +292,32 @@ struct VectorFunctionMetadata {
   /// Constant stats produced by the function, NAN represent unknown values.
   /// If constant stats are provided they take precedence over the results of
   /// transformSourceStats
-  VectorFunctionStatistics constantStats;
+  VectorFunctionConstantStatistics constantStats;
 
-  /// transforms source stats vector to attain final function statistics.
-  std::function<VectorFunctionStatistics(std::vector<VectorFunctionStatistics>)>
-      transformSourceStats;
+  /// map of function position argument to source statistics transformation.
+  std::map<int, VectorFunctionPropagateSourceStats> transformSourceStats;
 };
 ```
-Where `VectorFunctionStatistics` is  defined as follows :
+
+Where `VectorFunctionConstantStatistics` and `VectorFunctionPropagateSourceStats` is  defined as follows :
 
 ```c++
-struct VectorFunctionStatistics {
+struct VectorFunctionPropagateSourceStats {
+
+  bool propagateAllStats{true};
+  
+  StatsPropagationBehavior lowValue{UNKNOWN};
+
+  StatsPropagationBehavior highValue{UNKNOWN};
+
+  StatsPropagationBehavior nullFraction{UNKNOWN};
+
+  StatsPropagationBehavior averageRowSize{UNKNOWN};
+
+  StatsPropagationBehavior distinctValuesCount{UNKNOWN};
+};
+
+struct VectorFunctionConstantStatistics {
   double lowValue{NAN};
 
   double highValue{NAN};
@@ -382,46 +328,65 @@ struct VectorFunctionStatistics {
 
   double distinctValuesCount{NAN};
 };
-
 ```
 
+`StatsPropagationBehavior` is an enum that defines different ways stats for functions can be estimated.
+
+```c++
+namespace facebook::velox::exec {
+enum StatsPropagationBehavior {
+  /** Use the max value across all arguments to derive the new stats value */
+  USE_MAX_ARGUMENT,
+  /** Sum the stats value of all arguments to derive the new stats value */
+  SUM_ARGUMENTS,
+  /** Propagate the source stats as-is */
+  USE_SOURCE_STATS,
+  /** Use the value of output row count. */
+  ROW_COUNT,
+  /** Use the value of row_count * (1 - null_fraction). */
+  ROW_COUNT_TIMES_INV_NULL_FRACTION,
+  /** use the value of TYPE_WIDTH in varchar(TYPE_WIDTH) */
+  USE_TYPE_WIDTH_VARCHAR,
+  /** Take max of type width of arguments with varchar type. */
+  MAX_TYPE_WIDTH_VARCHAR,
+  /** Stats are unknown and thus no action is performed. */
+  UNKNOWN
+};
+}
+```
 Examples for C++ functions:
 
 ```c++
-  static exec::VectorFunctionStatistics computeConcatStats(
-      std::vector<exec::VectorFunctionStatistics> argsSourceStats) {
-    double sumAvgRowSize = NAN;
-    double sumNullFractions = NAN;
-    for (auto i = argsSourceStats.cbegin(); i != argsSourceStats.cend(); ++i) {
-      if (!isnan(i->nullFraction)) {
-        if (isnan(sumNullFractions)) {
-          sumNullFractions = i->nullFraction;
-        } else {
-          sumNullFractions += i->nullFraction;
-        }
-      }
-      if (!isnan(i->averageRowSize)) {
-        if (isnan(sumAvgRowSize)) {
-          sumAvgRowSize = i->averageRowSize;
-        } else {
-          sumAvgRowSize += i->averageRowSize;
-        }
-      }
-    }
-
-    return exec::VectorFunctionStatisticsBuilder()
-        .averageRowSize(sumAvgRowSize)
-        .nullFraction(sumNullFractions)
-        .build();
-  }
-  static exec::VectorFunctionMetadata metadata() {
-    return {.supportsFlattening = true,
-        .transformSourceStats = ConcatFunction::computeConcatStats
-    };
-  }
+static exec::VectorFunctionMetadata metadata() {
+return {
+    .supportsFlattening = true,
+    .transformSourceStats = {
+        {0,
+         exec::VectorFunctionPropagateSourceStats{
+             .propagateAllStats= false,
+             .nullFraction = exec::SUM_ARGUMENTS,
+             .averageRowSize = exec::SUM_ARGUMENTS}}}};
+}
 ```
 
-* __Phase 2__. Annotate some of the builtin scalar functions with above annotation.
+#### How does a C++ worker communicates functions stats behaviour and constant stats to the coordinator.
+
+We will extend the ongoing work described in [RFC-0003](RFC-0003-native-spi.md), with function registries to include function metadata.
+In both Java and C++, builtin functions have extra metadata () defined in FunctionMetadata class, which is used while computing estimated stats
+for optimizer.
+
+* __Phase 2__. Annotate some of the builtin scalar functions with appropriate annotations.
+
+Note: At this stage an exhaustive list is not ready.
+
+List of functions:
+1. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/MathFunctions.java
+2. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/StringFunctions.java
+3. `getHash` in presto-main/src/main/java/com/facebook/presto/operator/scalar/CombineHashFunction.java 
+4. `yearFromTimestamp` in presto-main/src/main/java/com/facebook/presto/operator/scalar/DateTimeFunctions.java
+
+
+A slice can represent a column or a constant string. In case of 
 
 * __Phase 3__. Extend the support to non-built-in UDFs. Add documentations and blogs with usage examples.
 
@@ -448,8 +413,6 @@ the upper bound for `varchar(x)` i.e. `x` , then use source stat `distinct value
 ```
 
 `substr` is at the heart of all `LIKE %X` statements, which is widely used. Without a more powerful framework support it is difficult to support a stats estimation. 
-
-See prior art, for how postgres handles it.
 
 ## Metrics
 
@@ -484,8 +447,9 @@ scope for this RFC.
 - What impact (if any) will there be on existing users? Are there any new session parameters, configurations, SPI updates, client API updates, or SQL grammar?
 
 
-Functions without this annotation will not be affect, to remain backwards compatible those functions without this Annotation will run as is. Also, a new session 
-config will be introduced i.e. `optimizer.scalar-function-stats-propagation-enabled=false`, by setting this flag this feature can be turned off.
+Functions without this annotation will not be affect, to remain backwards compatible those functions without this Annotation will run as is. A new session flag,
+`scalar_function_stats_propagation_enabled` and a new feature config will be introduced i.e. `optimizer.scalar-function-stats-propagation-enabled`,
+by setting this session flag or feature flag, this feature can be turned on or off.
 
 The existing users are not impacted, as we are not changing any existing APIs, however those who wish to leverage new API can migrate their functions. 
 
@@ -495,7 +459,7 @@ The existing users are not impacted, as we are not changing any existing APIs, h
 
 - What related issues do you consider out of scope for this RFC that could be addressed in the future independently of the solution that comes out of this RFC?
   - An ability to provide an expression to compute stats. 
-  
+
 ## Test Plan
 
 How do we ensure the feature works as expected? Mention if any functional tests/integration tests are needed. Special mention for product-test changes. If any PoC has been done already, please mention the relevant test results here that you think will bolster your case of getting this RFC approved.
