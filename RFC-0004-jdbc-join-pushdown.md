@@ -88,14 +88,19 @@ If presto get a join query which is trying to join tables either from same datas
 
 Currently for the join query, presto create a final plan which contains separate TableScanNode for each table that participated on join query and this TableScanNode info is used by the connector to create the select query. On top of this select query result, presto apply join condition and other predicate to provide the final result.
 
-In the proposed implementation, while performing the logical optimization, instead of creating separate TableScanNode for each table of the JoinNode, it uses a new single TableScanNode for holding all the table details which satisfies the "JoinPushdown condition" (JoinPushdown condition pointed below) in the join query. This new TableScanNode also hold join criteria for that "JoinPushdown condition" satisfied tables. Using this new TableScanNode it build join query at connector level and return the join result to presto. Now the further predicate which was not pushed down to connector level will apply on the result by the presto and return the final result.
+In the proposed implementation, while performing the logical optimization, instead of creating separate TableScanNode for each table of the JoinNode, it uses a new single TableScanNode for holding all the table details which satisfies the "JoinPushdown condition". The "JoinPushdown condition" is a simple term that check some conditions on tables which are participated on join query, to identify its eligibility to participate on join pushdown. This is not having any relation with the JoinCriteria (Join clause) or FilterCriteria and not confuse with that. 
 
-#### The JoinPushdown condition
+###### JoinPushdown condition
 
- 1. Table: left table and right table should be on same connector
- 2. Join clause: Join condition should be from same connectors table
- 3. Pushdown flag: A global setting is there for enable JdbcJoinPushdown
- 4. Filter Criteria: The filter criteria should be from same connector
+The "JoinPushdown condition" term or capability can be defined based on below four conditions
+
+ 1. Table condition: The JoinNode left and right should be a TableScanNode (table) and the tables should be from same connector (datasource)
+ 2. Join clause condition: The Join criteria of that JoinNode should be from same datasource
+ 3. Pushdown flag condition : A global setting is there for enable JdbcJoinPushdown. This flag is 'enable-join-query-pushdown=true' and configured in custom-config.properties. If it is 
+    false then no joinpushdown should happen.
+ 4. Filter Criteria condition: The filter criteria should be from same connector
+
+If a JoinNode satisfies the JoinPushdown condition then it convert to  new TableScanNode, it holds tables from JoinNode, join criteria and other information related to that JoinNode. Using this new TableScanNode it builds join query at connector level and return the join result to presto. Now the further predicate which was not pushed down to connector level will apply on the result by the presto and return the final result.
 
 
 ## Highlevel Design
