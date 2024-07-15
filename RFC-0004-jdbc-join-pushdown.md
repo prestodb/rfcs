@@ -100,6 +100,13 @@ The "JoinPushdown condition" term or capability can be defined based on below fo
     false then no joinpushdown should happen.
  4. Filter Criteria condition: The filter criteria should be from same connector
 
+For example JoinPushdown condition for below query is as follows
+| JoinQuery|
+|----------|
+| select pg1.name, db24.item, pg2.rate from postgres.pg.table1_pg1 pg1 join postgres.pg.table_pg2 pg2 on  pg1.cut_id = pg2.cust_id join db2.table_db11 db11 on  pg1.cut_id = db11.cust_id join db2.table_db22 db22 on  pg1.cut_id = db22.product_own_id |
+
+Here for the presto resolved JoinNode (deep left JoinNode) the left table will be 'pg.table1_pg1 pg1' and right table will be 'pg.table_pg2 pg2', both are from same datasource called  postgres, hence it satisfies 'Table condition' for JoinPushdown. Next we need to check 'Join clause condition' for this JoinNode, here it is 'on  pg1.cut_id = pg2.cust_id' and both the column in the join clause (JoinCriteria) is from same data source called postgres, hence it satisfies 'Join clause condition'. Here no additional filter predicate for this JoinNode if it was there it should be from same data source (postgres) to enable this node for join pushdown.
+
 If a JoinNode satisfies the JoinPushdown condition then it convert to  new TableScanNode, it holds tables from JoinNode, join criteria and other information related to that JoinNode. Using this new TableScanNode it builds join query at connector level and return the join result to presto. Now the further predicate which was not pushed down to connector level will apply on the result by the presto and return the final result.
 
 
