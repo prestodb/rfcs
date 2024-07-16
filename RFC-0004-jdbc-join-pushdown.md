@@ -206,13 +206,13 @@ Now the presto is responsible for return the final result by joining above icebe
 For implementing connector level join pushdown, first we need JoinNode and make available it for accessing on connector level. For that JoinNode should move to spi package (com.facebook.presto.spi.plan) from sql planner (com.facebook.presto.sql.planner.plan). It includes,
 
 * Moving dependent class to spi package.
+```
+         JoinNode.java
 
-        * JoinNode.java
+         AbstarctJoinNode.java
 
-        * AbstarctJoinNode.java
-
-        * SemiJoinNode.java
-
+         SemiJoinNode.java
+```
 * Refactor codes that use above class : Refactor the imports 
 
 * Currently visitJoin() is implemented on InternalPlanVistor. This class should not move to spi, instead add visit join method on PlanVistor 
@@ -224,7 +224,7 @@ For implementing connector level join pushdown, first we need JoinNode and make 
 
 ## 2) On ApplyConnectorOptimization Optimizer, add new ConnectorPlanOptimizer called JdbcJoinPushdown
 
-We  have ApplyConnectorOptimization Optimizer to add connector specific plan optimizer. This Optimizer is created on application initialization and load values while read catalog properties. Existing general flow for optimizer is as follows. 
+We  have ApplyConnectorOptimization Optimizer to add connector specific plan optimizer. This Optimizer is created on application initialization and load values while read catalogue properties. Existing general flow for optimizer is as follows. 
 
 ![ConnectorPlanOptimizer](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/7ff937c4-f3d8-40c1-acb8-80c540749f90)
 
@@ -234,6 +234,8 @@ We  have ApplyConnectorOptimization Optimizer to add connector specific plan opt
 #### Add new optimizer JdbcJoinPushdown to JdbcPlanOptimizerProvider
 
 While starting application, it build ‘ApplyConnectorOptimization’ with logical and physical plan optimiser. The optimizer provider for JDBC Connectors for  ‘ApplyConnectorOptimization’ is  JdbcPlanOptimizerProvider. Now JdbcPlanOptimizerProvider provide physical plan optimizer called JdbcComputePushdown. We need to create a new optimizer JdbcJoinPushdown and should implement JdbcPlanOptimizerProvider getLogicalPlanOptimizers method to return this JdbcJoinPushdown optimizer.
+
+```
 
    public class JdbcPlanOptimizerProvider
    
@@ -284,6 +286,7 @@ While starting application, it build ‘ApplyConnectorOptimization’ with logic
        
    
    }
+```
 
 ## 3) JdbcJoinPushdown Rule creation
 
@@ -293,26 +296,19 @@ In presto, when we use a join query, presto create a PlanNode with JoinNode. Joi
 
 In JoinPushdown optimiser, we need to traverse the JoinNode on left depth first manner. During traversal, if the left and right tables are from same connector and its join conditions are  from the same connector then it satisfies the  “join pushdown condition” and needs to create a ‘single table scan’ (join query builder) and replace JoinNode with ‘single table scan’ if the global pushdown flag is enabled. Then need to check with its parent JoinNode right table to match above “join pushdown condition”. If that also matches the connector and join condition then that table also add to previously created ‘single table scan’ and replace the JoinNode.  
 
-#### The JoinPushdown condition
-
- * Table: left table and right table should be on same connector
- * Join clause: Join condition should be from same connectors table
- * Pushdown flag: A global setting is there for enable JdbcJoinPushdown
- * Filter Criteria: The filter criteria should from same connector
-
-.
-
 This JoinNode replacement to ‘single table scan’ will continue until the traversal find any of the below condition and immediately return the node without travers or pushing down the parent nodes. 
 
 a) left and right tables are from different catalogue
 
 b) join condition are from different catalogue
 
-c) Filter condition is not from same catalogue
+c) filter condition is not from same catalogue
+
+d) if there is any functions or operators (presto functions or sql functions like abs()) on JoinNode that cannot handle by the connector
 
 #### The JoinPushdown Rule representation
 
-JoinPushdown Rule or traverse algorithm should consider traversing the PlanNode hierarchy on left depth fisrt JoinNode and then right JoinNodes (if the right is a JoinNode instead of TableScanNode) to reach out the left and right table of the JoinNode and then to validate its 'Joinpushdown condition'. If it satisfies the join pushdown condition then it will replace that JoinNode to TableScanNode.
+JoinPushdown Rule or traverse algorithm should consider traversing the PlanNode hierarchy on left depth first JoinNode and then right JoinNodes (if the right is a JoinNode instead of TableScanNode) to reach out the left and right table of the JoinNode and then to validate its 'Joinpushdown condition'. If it satisfies the join pushdown condition then it will replace that JoinNode to TableScanNode.
 
 #### The algorithm for join query which contains tables from same connector (postgres) is as follows.
 
@@ -324,7 +320,7 @@ In JoinPushdown Optimizer-Rule, the JoinNode is traversed on left depth first ma
 
 #### The algorithm for join query which contains tables from multiple connector
 
-JoinPushdown Rule or traverse algorithm should consider traversing the JoinNode on left depth fisrt to identify left deep JoinNode and then travers to its right JoinNode on left depth fisrt then right. After traversing all JoinNode on this manner it will validate the resolved left table and right table of that visited JoinNode. For example if we have a PlanNode like below 
+JoinPushdown Rule or traverse algorithm should consider traversing the JoinNode on left depth first to identify left deep JoinNode and then travers to its right JoinNode on left depth first then right. After traversing all JoinNode on this manner it will validate the resolved left table and right table of that visited JoinNode. For example if we have a PlanNode like below 
 
 ![bushy1](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/0d04c10b-bccf-4df8-966b-3ae7fba89c31)
 
@@ -356,6 +352,7 @@ Currently JoinNode is not accessible at Connector level (ApplyConnectorOptimizat
 
 JdbcJoinPushdown needs to implement ConnectorPlanOptimizer and the optimze method need to use ConnectorPlanRewriter to rewrite the JoinNode to a TableScanNode. Refer existing JdbcComputePushdown class for reference.
 
+```
 public class JdbcJoinPushdown
 
         implements ConnectorPlanOptimizer
@@ -397,12 +394,12 @@ public PlanNode visitJoin(JoinNode node, RewriteContext<Void> context)
 }
 
 }
-
+```
 On JdbcJoinPushdown, we have the JoinNode (PlanNode). Here we need to travers through the JoinNode to find out JoinNodes which satisfies the “Joinpushdown Condition”. For the nodes which satisfies this condition needs to converted to TableScanNode.  Refer session 3 for the details.
 
 ## 6) Handle JoinNode on JdbcJoinPushdown ConnectorPlanRewriter. 
 
-On JdbcJoinPushdown, we need to override visitJoin() and it will be invoke from ApplyConnectorOptimization. Once a node reach to  visitJoin() we should validate the node against  “JoinPushdown Condition” and if sattisfies the condition then replace the JoinNode with a new TableScanNode. Using this new TableScanNode we should able to hold all the table details which is enabled for join pushdown and transfer it to connector level. 
+On JdbcJoinPushdown, we need to override visitJoin() and it will be invoke from ApplyConnectorOptimization. Once a node reach to  visitJoin() we should validate the node against  “JoinPushdown Condition” and if satisfies the condition then replace the JoinNode with a new TableScanNode. Using this new TableScanNode we should able to hold all the table details which is enabled for join pushdown and transfer it to connector level. 
 
 For this we need to introduce a new structure on JdbcTableHandle to hold all the table details as follows.
 
@@ -449,11 +446,11 @@ Table fromTable = joinTables.get(0).left;
 
 #### Handling Select Column
 
-The select column needs to resolve from the above fromTable.joinVariables. The values for TableInfo.joinVariables will be filled only on the very first JoinTableInfo.left (joinTables.get(0).left) which we may used to resolve left table. All other TableInfo.joinVariables will be null or empty.
+The select column needs to resolve from the above fromTable.joinVariables. The values for TableInfo.joinVariables will be filled only on the very first JoinTableInfo.left (joinTables.get(0).left) which we may use to resolve left table. All other TableInfo.joinVariables will be null or empty.
 
 #### Handling Right/Join Tables
 
-The right/join table need to resolve from JoinTableInfo by strictly following the index of JoinTableInfo on joinTables list that we recieve.  The first Join table should the right table of first item (JoinTableInfo) of the joinTables list and the second join table should be the right table of the second (JoinTableInfo) of the joinTables list. This order should keep for the last n’th item as n’th join table will be the nth item right value of  joinTables list.
+The right/join table need to resolve from JoinTableInfo by strictly following the index of JoinTableInfo on joinTables list that we receive.  The first Join table should the right table of first item (JoinTableInfo) of the joinTables list and the second join table should be the right table of the second (JoinTableInfo) of the joinTables list. This order should keep for the last n’th item as n’th join table will be the nth item right value of  joinTables list.
 
 
 #### Handling JoinType
@@ -466,7 +463,7 @@ The Join criteria is also available with each JoinTableInfo as JoinTableInfo.cri
 
 #### Resolving Assignment
 
-The select column name and join criteria may be available as an expression and so each column (expression) we need to resolve from exact table assignement. Against each  TableInfo we have assignments object and we need to extract the actual table name and column name from this assignment for each select and criteria column.
+The select column name and join criteria may be available as an expression and so each column (expression) we need to resolve from exact table assignment. Against each  TableInfo we have assignments object and we need to extract the actual table name and column name from this assignment for each select and criteria column.
 
 #### Handling Filter
 
@@ -488,7 +485,7 @@ During this task we are focusing on postgres (for OSS) and db2 (for IBM) to do t
 
 *) Currently we planned to validate postgres (oss) connector and db2 (IBM) connector. Validation is required for all Jdbc Connector.
 
-*) Cost based Join Pushdowm is not handled now 
+
 
 ## [Optional] Other Approaches Considered
 
@@ -496,16 +493,19 @@ Based on the discussion, this may need to be updated with feedback from reviewer
 
 ## Adoption Plan
 
-- We can enable join pushdown for Jdbc Connectors using presto custom configuration enable-join-query-pushdown=true.
-- Currently presto is able to pushdown only one connector table. Pushing down multiple connector tables to jdbc level is out of scope for this RFC
-
+- We can enable join pushdown for JDBC connectors using Presto's custom configuration enable-join-query-pushdown=true.
+- Currently, Presto is able to push down only one connector table. Pushing down multiple connector tables to the JDBC level is out of scope for this RFC.
+- Cost based Join Pushdown is not handled now 
+- We cannot handle predicates (like LIMIT, rowcount, NVL, ABS(), etc.) and custom functions and operators (Presto-specific functions) that are used inside join criteria. For such
+  joins, pushdown will not take place and the process will return to the original Presto flow.
+  
 
 
 ## Test Plan
 
 - Unit tests can test the JdbcJoinPushdown capabilities by enabling 'enable-join-query-pushdowntesting' flag
-- Regrestion testing will do locally to validate all sql for Postgres
-- Regrestion testing will do locally to validate all sql for IBM specific db2
+- Regression testing will do locally to validate all sql for Postgres
+- Regression testing will do locally to validate all sql for IBM specific db2
 - We did a poc for join query with postgres, db2 and iceberg table.
     *) While pushing down the postgres join its performance is 3x
     *) While pushing down the db2 join its performance is 8x
