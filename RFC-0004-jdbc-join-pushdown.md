@@ -9,25 +9,34 @@ Proposers
 * Ajas M M
 
 
-## [Related Issues]
+## Related Issues
 
 https://github.com/prestodb/presto/issues/23152
 
 ## Summary
 
-When presto identifies a join query which is specific to a Jdbc remote datasource, it split the join query into multiple select query based on the tables involved in the join query and select all the records from each tables using the jdbc connector without passing the join condition. Then the results of these sub-queries are fetched into the presto workers, additional operations such as filters, joins, sorts are applied before sending back to the user.
+At present, when a query joins multiple tables, it creates a separate TableScanNode for each table. Each TableScanNode select all the records from that table. The join operation is then executed in-memory in Presto using a JOIN node by applying JoinCriteria, FilterPredicate and other criteria (like sort, limit etc).
 
-If we  "Push down" or send these joins which involves on same catalog/remote datasource as part of the  SQL along with join condition to the remote data source it increase the performance 3x to 10x.
+However, if the query joins tables from the same JDBC datasource, it would be more efficient to let the datasource handle the join instead of creating a separate TableScanNode for each table and joining them in Presto. If we  "Push down" or send these joins to remote JDBC datasource it increase the performance 3x to 10x.
 
-For example for the below postgres join query if we pushdown the join to a single TableScanNode, then the implementation and performance will be as follows.
+For example for the below postgres join query if we pushdown the join to a single TableScanNode, then the Presto Plan and performance will be as follows.
 
-| Join Query |
-|----------|
-| select order_id, c_customer_id from postgresql.public.orders o inner join postgresql.public.customer c on c.c_customer_id = o.customer_id    | 
+**Join Query**
 
-| Original presto plan |
-|----------|
-| - Output[PlanNodeId 9][order_id, c_customer_id] => [order_id:integer, c_customer_id:char(16)]
+```
+SELECT order_id,
+       c_customer_id
+FROM postgresql.public.orders o
+    INNER JOIN postgresql.public.customer c ON c.c_customer_id = o.customer_id;
+```
+
+
+
+**Original presto plan**
+
+```
+
+ - Output[PlanNodeId 9][order_id, c_customer_id] => [order_id:integer, c_customer_id:char(16)]
     - RemoteStreamingExchange[PlanNodeId 266][GATHER] => [order_id:integer, c_customer_id:char(16)]
         - InnerJoin[PlanNodeId 4][("customer_id" = "c_customer_id")][$hashvalue, $hashvalue_11] => [order_id:integer, c_customer_id:char(16)]
                 Distribution: PARTITIONED
@@ -47,11 +56,14 @@ For example for the below postgres join query if we pushdown the join to a singl
                             Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}
                             $hashvalue_13 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(c_customer_id), BIGINT'0')) (2:12)
                             LAYOUT: {domains=ALL, additionalPredicate={}}
-                            c_customer_id := JdbcColumnHandle{connectorId=postgresql, columnName=c_customer_id, jdbcTypeHandle=JdbcTypeHandle{jdbcType=1, jdbcTypeName=bpchar, columnSize=16, decimalDigits=0, arrayDimensions=null}, columnType=char(16), nullable=true, comment=Optional.empty} (2:12)    | 
+                            c_customer_id := JdbcColumnHandle{connectorId=postgresql, columnName=c_customer_id, jdbcTypeHandle=JdbcTypeHandle{jdbcType=1, jdbcTypeName=bpchar, columnSize=16, decimalDigits=0, arrayDimensions=null}, columnType=char(16), nullable=true, comment=Optional.empty} (2:12)
 
-| Joinpushdown presto plan |
-|----------|
-| - Output[PlanNodeId 9][order_id, c_customer_id] => [order_id:integer, c_customer_id:char(16)]
+```
+
+**Joinpushdown presto plan**
+
+```
+ - Output[PlanNodeId 9][order_id, c_customer_id] => [order_id:integer, c_customer_id:char(16)]
         Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: ?}
     - RemoteStreamingExchange[PlanNodeId 233][GATHER] => [order_id:integer, c_customer_id:char(16)]
             Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: ?}
@@ -59,24 +71,24 @@ For example for the below postgres join query if we pushdown the join to a singl
                 Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}
                 LAYOUT: {domains=ALL, additionalPredicate={}}
                 order_id := JdbcColumnHandle{connectorId=postgresql, columnName=order_id, jdbcTypeHandle=JdbcTypeHandle{jdbcType=4, jdbcTypeName=int4, columnSize=10, decimalDigits=0, arrayDimensions=null}, columnType=integer, nullable=true, comment=Optional.empty} (1:45)
-                c_customer_id := JdbcColumnHandle{connectorId=postgresql, columnName=c_customer_id, jdbcTypeHandle=JdbcTypeHandle{jdbcType=1, jdbcTypeName=bpchar, columnSize=16, decimalDigits=0, arrayDimensions=null}, columnType=char(16), nullable=true, comment=Optional.empty} (2:12)    | 
+                c_customer_id := JdbcColumnHandle{connectorId=postgresql, columnName=c_customer_id, jdbcTypeHandle=JdbcTypeHandle{jdbcType=1, jdbcTypeName=bpchar, columnSize=16, decimalDigits=0, arrayDimensions=null}, columnType=char(16), nullable=true, comment=Optional.empty} (2:12)
+``` 
 
 
 
-| Original presto plan performance|
-|----------|
-|  <img width="1030" alt="Screenshot 2024-07-15 at 12 14 02 PM" src="https://github.com/user-attachments/assets/3e587e72-1fc4-48aa-bd44-c24b16bad674"> |
+**Original presto plan performance**
 
-| Joinpushdown presto plan performance|
-|----------|
-|  <img width="1030" alt="Screenshot 2024-07-15 at 12 14 45 PM" src="https://github.com/user-attachments/assets/51e7f7a9-0017-425c-ac35-15d4a84a3f18">  |
+  <img width="1030" alt="Screenshot 2024-07-15 at 12 14 02 PM" src="https://github.com/user-attachments/assets/3e587e72-1fc4-48aa-bd44-c24b16bad674"> 
+
+**Joinpushdown presto plan performance**
+
+  <img width="1030" alt="Screenshot 2024-07-15 at 12 14 45 PM" src="https://github.com/user-attachments/assets/51e7f7a9-0017-425c-ac35-15d4a84a3f18">  
+
 ## Background
 
 
 
-This implementation is to address a performance limitation of Presto federation of SQLs of JDBC connector to remote data sources such as DB2, Postgres, Oracle etc. Currently, in Presto, we have predicate pushdown (WHERE condition pushdown) to some extent in JDBC connectors and not having any join pushdown or join condition pushdown capabilities. 
-
-This cause high performance impact on join queries and it is raised by some of our client. While comparing with competitors we also missing the Jdbc join pushdown capabilities.
+This implementation is to address a performance limitation of Presto federation of SQLs of JDBC connector to remote data sources such as DB2, Postgres, Oracle etc. Currently, Presto support predicate pushdown (WHERE condition pushdown) to some extent in JDBC connectors, but it does not have any join pushdown capabilities. This cause high performance impact on join queries and it is raised by some of our client. While comparing with competitors we also missing the Jdbc join pushdown capabilities.
 
 We did a poc by changing the presto generated PlanNode to handle jdbc join pushdown and it increases the performance from 3x on postgres and  8x on db2 remote datasource. Now we need to perform its actual implementation 
 
@@ -84,26 +96,35 @@ We did a poc by changing the presto generated PlanNode to handle jdbc join pushd
 
 ## Proposed Implementation
 
-If presto get a join query which is trying to join tables either from same datasource or from different datasource, it is receiving as a string formatted sql query. Using presto parser and analyser, presto validate the syntax and converted to Query (Statement) object. This Query object is converted to presto internal reference architecture called Plan, using its logical and physical optimizers. Finally this plan is executed by the executor. 
+If presto get a join query (from the CLI or UI) which is trying to join tables either from same datasource or from different datasource, it is receiving as a string formatted sql query. Presto validate the syntax and convert it to Query (Statement) object using presto parser and analyser. This Query object is converted to presto internal reference architecture called Plan, using its logical and physical optimizers. Finally this plan is executed by the executor. 
 
 Currently for the join query, presto create a final plan which contains separate TableScanNode for each table that participated on join query and this TableScanNode info is used by the connector to create the select query. On top of this select query result, presto apply join condition and other predicate to provide the final result.
 
-In the proposed implementation, while performing the logical optimization, instead of creating separate TableScanNode for each table of the JoinNode, it uses a new single TableScanNode for holding all the table details which satisfies the "JoinPushdown condition". The "JoinPushdown condition" is a simple term that check some conditions on tables which are participated on join query, to identify its eligibility to participate on join pushdown. This is not having any relation with the JoinCriteria (Join clause) or FilterCriteria and not confuse with that. 
+In the proposed implementation, while performing the logical optimization, instead of creating separate TableScanNode for each table of the JoinNode, it uses a new single TableScanNode which holds all the table details which satisfies the "JoinPushdown condition". The "JoinPushdown condition" is a simple term that check some conditions on tables which are participated on join query, to identify its eligibility to participate on join pushdown. This is not having any relation with the JoinCriteria (Join clause) or FilterCriteria and do not confuse it with that. 
 
-###### JoinPushdown condition
+### JoinPushdown condition
 
 The "JoinPushdown condition" term or capability can be defined based on below four conditions
 
  1. Table condition: The JoinNode left and right should be a TableScanNode (table) and the tables should be from same connector (datasource)
  2. Join clause condition: The Join criteria of that JoinNode should be from same datasource
- 3. Pushdown flag condition : A global setting is there for enable JdbcJoinPushdown. This flag is 'enable-join-query-pushdown=true' and configured in custom-config.properties. If it is 
+ 3. Pushdown feature flag : A global setting is there for enable JdbcJoinPushdown. This flag is 'enable-join-query-pushdown=true' and configured in custom-config.properties. If it is 
     false then no joinpushdown should happen.
  4. Filter Criteria condition: The filter criteria should be from same connector
 
 For example JoinPushdown condition for below query is as follows
-| JoinQuery|
-|----------|
-| select pg1.name, db24.item, pg2.rate from postgres.pg.table1_pg1 pg1 join postgres.pg.table_pg2 pg2 on  pg1.cut_id = pg2.cust_id join db2.table_db11 db11 on  pg1.cut_id = db11.cust_id join db2.table_db22 db22 on  pg1.cut_id = db22.product_own_id |
+
+**JoinQuery**
+
+```
+select pg1.name, 
+       db24.item, 
+       pg2.rate 
+from postgres.pg.table1_pg1 pg1 
+    join postgres.pg.table_pg2 pg2 on  pg1.cut_id = pg2.cust_id 
+    join db2.table_db11 db11 on  pg1.cut_id = db11.cust_id 
+    join db2.table_db22 db22 on  pg1.cut_id = db22.product_own_id
+```
 
 Here for the presto resolved JoinNode (deep left JoinNode) the left table will be 'pg.table1_pg1 pg1' and right table will be 'pg.table_pg2 pg2', both are from same datasource called  postgres, hence it satisfies 'Table condition' for JoinPushdown. Next we need to check 'Join clause condition' for this JoinNode, here it is 'on  pg1.cut_id = pg2.cust_id' and both the column in the join clause (JoinCriteria) is from same data source called postgres, hence it satisfies 'Join clause condition'. Here no additional filter predicate for this JoinNode if it was there it should be from same data source (postgres) to enable this node for join pushdown.
 
@@ -124,7 +145,7 @@ After JoinPushdown optimizer, the PlanNode ensure only one TableScanNode against
 
 ![joinpushdown_summary](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/b0b4bddb-5ef9-40fc-a51f-d6c34ba36bdb)
 
-#### Proposed JoinPushdwon working on federated query
+#### Join pushdowns for bushy trees & queries involving multiple connectors
 
 This jdbc join pushdown proposal is based on the existing presto flow and it is optimizing the PlanNode using JdbcJoinPushdown optimizer to pushing down the join node to connector level. 
 
