@@ -413,7 +413,8 @@ How can we measure the impact of this feature?
 
 Based on the discussion, this may need to be updated with feedback from reviewers.
 
-### Approach 1 Trying to find a heuristic based mechanism to estimate functions cost, for example : A function takes a single argument of type `varchar(20)` and
+### Approach 1 
+Trying to find a heuristic based mechanism to estimate functions cost, for example : A function takes a single argument of type `varchar(20)` and
 returns the value of same type i.e. `varchar(20)` and is SCALAR and deterministic, then we can apply heuristic and say that source statistics can be propagated as is.
 
 Example 2: The input and output column do not match, input is `varchar(200)` and output is `varchar(10)`.Then we can say that average row size is changed.
@@ -426,7 +427,8 @@ enabled/disabled using a session flag : `scalar_function_stats_propagation_enabl
 #### Cons
 * Problem with heuristic based approach is unknown nature of functions, and thus it can be difficult to come up with heuristics that are always accurate.
 
-### Approach 2: Reference [1. Monsoon](#references). discusses various stochastic approaches to solve the same problem, a user provided stats calculator will complement such
+### Approach 2: 
+Reference [Monsoon](#references), discusses various stochastic approaches to solve the same problem, a user provided stats calculator will complement such
 approaches as one could compute via statistical process for those functions user provided stats computation is unavailable. Sampling and other stochastic processes are beyond the
 scope for this RFC.
 
