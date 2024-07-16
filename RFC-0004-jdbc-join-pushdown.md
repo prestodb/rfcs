@@ -467,6 +467,8 @@ During this task we are focusing on postgres (for OSS) and db2 (for IBM) to do t
 
 *) Currently we planned to validate postgres (oss) connector and db2 (IBM) connector. Validation is required for all Jdbc Connector.
 
+*) Cost based Join Pushdowm is not handled now 
+
 ## [Optional] Other Approaches Considered
 
 Based on the discussion, this may need to be updated with feedback from reviewers.
