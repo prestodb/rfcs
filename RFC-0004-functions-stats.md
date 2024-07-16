@@ -108,9 +108,6 @@ public @interface ScalarFunctionConstantStats
   double minValue() default Double.NaN;
   double maxValue() default Double.NaN;
 
-  // Histogram
-  HistogramTypes histogram() default HistogramTypes.UNKNOWN;
-
   /**
    * The constant distinct values count to be applied.
    */
