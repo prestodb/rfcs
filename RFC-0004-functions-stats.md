@@ -16,16 +16,20 @@ Proposers
 ## Summary
 Provide a set of annotations for the scalar functions to specify how input statistics are transformed due to application of the function.
 
+A function is just a “black box” for the database system and thus the function may be executed much less efficiently than they could be.
+It is possible to supply additional knowledge that helps the planner optimize function calls.
+
 A SCALAR function such as `upper(COLUMN1)` could be annotated with `propagateStatistics: true`, and would reuse source statistics of `COLUMN1`.
 Another example : `is_null(COLUMN1)` could be annotated with `distinctValueCount: 2`, `nullFraction: 0.0` and `avgRowSize: 1.0` and would have these stats values hardcoded
 
-
 ## Background
-Currently, we compute new stats for only a handful of functions (`CAST(...)`, `is_null(Slice)`, arithmetic operators) by using a hand rolled implementation in [`ScalarStatsCalculator`](https://github.com/prestodb/presto/blob/0.288-edge7/presto-main/src/main/java/com/facebook/presto/cost/ScalarStatsCalculator.java#L118))
+Currently, we compute new stats for only a handful of functions (`CAST(...)`, `is_null(Slice)`, arithmetic operators) by using a hand rolled implementation in
+[`ScalarStatsCalculator`](https://github.com/prestodb/presto/blob/0.289-edge7/presto-main/src/main/java/com/facebook/presto/cost/ScalarStatsCalculator.java#L118))
 
 For other functions the optimizer cannot estimate statistics since it is unaware of how source stats need to be transformed.
 [Related Issues](#related-issues) [1] and [2] are examples of queries we could have been optimized better if there was some way to 
-derive source stats. `VariableStatsEstimate.unknown()` is propgated for these stats (Shown below as `?` )
+derive source stats. [VariableStatsEstimate](https://github.com/prestodb/presto/blob/0.289-edge7/presto-main/src/main/java/com/facebook/presto/cost/VariableStatsEstimate.java#L35)
+is used to store stats and `VariableStatsEstimate.unknown()` is propagated in cases where stats are missing (Shown below as `?` )
 
 ```
 presto:tpcds_sf1_parquet> explain select 1 FROM customer, customer_address WHERE c_birth_country = upper(ca_country);
@@ -63,7 +67,6 @@ presto:tpcds_sf1_parquet> explain select 1 FROM customer, customer_address WHERE
 
 This proposal discusses alternatives to adding special cases for optimising scalar udfs or functions.
 
-
 ### Prior-Art
 
 #### PostgreSQL
@@ -71,33 +74,25 @@ PostgreSQL allows the user to provide a support function which can compute eithe
 e.g. https://www.postgresql.org/docs/15/xfunc-optimization.html . Postgresql refers to these
 as `planner support functions` (postgresql/src/include/nodes/supportnodes.h).
 
-
 #### DuckDb
 DuckDb also allows the user to specify a similar helper function to transform source stats,
-see [duckdb#113](https://github.com/duckdb/duckdb/pull/1133/files#diff-0833c08516123b2a2b239dd25daabdf5a3b0da8c51e00fddbcfd7965c47bc4b6)
-
-
-#### Apache spark:
-
-Acc. https://jaceklaskowski.gitbooks.io/mastering-spark-sql/content/spark-sql-udfs-blackbox.html , spark treats UDFs as black box. 
-Code citation: [Spark does not have stats for functions](https://github.com/apache/spark/blob/v4.0.0-preview1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/statsEstimation/FilterEstimation.scala#L206)
-It has special casing for common operators: [code ref](https://github.com/apache/spark/blob/v4.0.0-preview1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/logical/statsEstimation/FilterEstimation.scala#L142)
+see [duckdb#1133](https://github.com/duckdb/duckdb/pull/1133/files#diff-0833c08516123b2a2b239dd25daabdf5a3b0da8c51e00fddbcfd7965c47bc4b6)
 
 ### Goals
 
 1. Provide a mechanism for transforming source statistics for scalar functions
-1. Show impact as plan changes for benchmark queries
+2. Show impact as plan changes for benchmark queries
 
 ### Non-goals
 1. Non-SCALAR functions will not be annotated
-1. Runtime metrics to measure latency/CPU impact of performing these transformations
-1. Give accurate stats by either sampling or applying a statistical technique.
+2. Runtime metrics to measure latency/CPU impact of performing these transformations
+3. Give accurate stats by either sampling or applying a statistical technique.
 
 ## Proposed Implementation
 
 We propose a phase wise implementation plan -
 
-* __Phase 1__.
+### Phase 1 - JAVA Function annotations
 
  * Support builtin scalar functions stats propagation implementation for JAVA.
 
@@ -105,20 +100,6 @@ We propose a phase wise implementation plan -
 in java with fields as follows:
 
 ```java
-/**
- * By default, a function is just a “black box” that the database system knows very little about the behavior of.
- * However, that means that queries using the function may be executed much less efficiently than they could be.
- * It is possible to supply additional knowledge that helps the planner optimize function calls.
- * Scalar functions are straight forward to optimize and can have impact on the overall query performance.
- * Use this annotation to provide information regarding how this function impacts following query statistics.
- * <p>
- * A function may take one or more input column or a constant as parameters. Precise stats may depend on the input
- * parameters. This annotation does not cover all the possible cases and allows constant values for the following fields.
- * Value Double.NaN implies unknown.
- * </p>
- * 
- * Note: Constant stats takes precedence over all.
- */
 @Retention(RUNTIME)
 @Target(METHOD)
 public @interface ScalarFunctionConstantStats
@@ -150,8 +131,9 @@ public @interface ScalarFunctionConstantStats
 
 ```
 
-```java
+Note: Constant stats takes precedence over all.
 
+```java
 @Retention(RUNTIME)
 @Target(PARAMETER)
 public @interface ScalarPropagateSourceStats
@@ -165,7 +147,6 @@ public @interface ScalarPropagateSourceStats
     StatsPropagationBehavior nullFraction() default StatsPropagationBehavior.UNKNOWN;
     StatsPropagationBehavior histogram() default StatsPropagationBehavior.UNKNOWN;
 }
-
 ```
 
 `StatsPropagationBehavior` is an enum with following options to control how stats are handled.
@@ -190,6 +171,18 @@ public enum StatsPropagationBehavior
     MAX_TYPE_WIDTH_VARCHAR,
     /** Stats are unknown and thus no action is performed. */
     UNKNOWN
+}
+```
+
+`FunctionMetadata` is expanded to include stats, which is available for processing at
+[ScalarStatsCalculator](https://github.com/prestodb/presto/blob/0.289-edge7/presto-main/src/main/java/com/facebook/presto/cost/ScalarStatsCalculator.java#L124)
+
+```java
+public class FunctionMetadata
+{
+    // existing fields...
+    private final Map<Signature, ScalarStatsHeader> statsHeader;
+    // ...
 }
 ```
 
@@ -237,7 +230,6 @@ Examples of using above annotations for various function in `StringFunctions.jav
     public static Slice concat(
             @LiteralParameter("x") Long x,
             @ScalarPropagateSourceStats(
-                    propagateAllStats = true,
                     nullFraction = USE_MAX_ARGUMENT,
                     avgRowSize = SUM_ARGUMENTS,
                     distinctValuesCount = ROW_COUNT) @SqlType("char(x)") Slice left,
@@ -250,45 +242,38 @@ Examples of using above annotations for various function in `StringFunctions.jav
 
 4. An example of using both `ScalarFunctionConstantStats` and `ScalarPropagateSourceStats`.
 ```java
-    @ScalarFunctionConstantStats(minValue = 0)
-    public static long levenshteinDistance(
-            @ScalarPropagateSourceStats(
-                    maxValue = MAX_TYPE_WIDTH_VARCHAR,
-                    distinctValuesCount = MAX_TYPE_WIDTH_VARCHAR) @SqlType("varchar(x)") Slice left,
-            @SqlType("varchar(y)") Slice right){ 
-    //... 
-  }
+@Description("computes Levenshtein distance between two strings")
+@ScalarFunction
+@LiteralParameters({"x", "y"})
+@SqlType(StandardTypes.BIGINT)
+@ScalarFunctionConstantStats(minValue = 0, avgRowSize = 8)
+public static long levenshteinDistance(
+        @ScalarPropagateSourceStats(
+                propagateAllStats = false,
+                maxValue = MAX_TYPE_WIDTH_VARCHAR,
+                distinctValuesCount = MAX_TYPE_WIDTH_VARCHAR,
+                nullFraction = SUM_ARGUMENTS) @SqlType("varchar(x)") Slice left,
+        @SqlType("varchar(y)") Slice right)
+{ //... 
+}
 ```
 
-For C++ functions, `VectorFunctionMetadata` is expanded to include `constantStats` and
-`transformSourceStats` as follows.
+__`minValue` is 0 and `maxValue` and `distinctValuesCount` can be max of varchar(type_width) of `left` and `right` i.e. max(x, y),
+`nullFraction` is sum of source stats of both `left` and `right`__
+
+A precise value of `minValue` can even be more than 0 for a particular dataset and same for `maxValue` can be different too, the goal is to estimate with some 
+knowledge of function characteristics. It is not always possible to provide an accurate value, a best-effort estimate is used.
+
+### Phase 2: C++ implementation.
+
+For C++ functions, [VectorFunctionMetadata](https://github.com/facebookincubator/velox/blob/0adc62e3aaf647596ab476f6300a4165e60f6b91/velox/expression/FunctionMetadata.h)
+is expanded to include `constantStats` and `transformSourceStats` as follows.
 
 ```c++
 
-struct VectorFunctionMetadata {
-  /// Boolean indicating whether this function supports flattening, i.e.
-  /// converting a set of nested calls into a single call.
-  ///
-  ///     f(a, f(b, f(c, d))) => f(a, b, c, d).
-  ///
-  /// For example, concat(string,...), concat(array,...), map_concat(map,...)
-  /// Presto functions support flattening. Similarly, built-in special format
-  /// AND and OR also support flattening.
-  ///
-  /// A function that supports flattening must have a signature with variadic
-  /// arguments of the same type. The result type must be the same as input
-  /// type.
-  bool supportsFlattening{false};
-
-  /// True if the function is deterministic, e.g given same inputs always
-  /// returns same result.
-  bool deterministic{true};
-
-  /// True if null in any argument always produces null result.
-  /// In this case, 'rows' in VectorFunction::apply will point only to positions
-  /// for which all arguments are not null.
-  bool defaultNullBehavior{true};
-
+struct VectorFunctionMetadata { 
+   // ....
+   
   /// Constant stats produced by the function, NAN represent unknown values.
   /// If constant stats are provided they take precedence over the results of
   /// transformSourceStats
@@ -354,8 +339,11 @@ enum StatsPropagationBehavior {
 };
 }
 ```
+
 Examples for C++ functions:
 
+Following is how metadata would look like for
+[ConcatFunction::metadata](https://github.com/facebookincubator/velox/blob/0adc62e3aaf647596ab476f6300a4165e60f6b91/velox/functions/prestosql/StringFunctions.cpp#L273):
 ```c++
 static exec::VectorFunctionMetadata metadata() {
 return {
@@ -369,31 +357,27 @@ return {
 }
 ```
 
-#### How does a C++ worker communicates functions stats behaviour and constant stats to the coordinator.
+#### How does a C++ worker communicate functions stats behavior and constant stats to the coordinator.
 
-We will extend the ongoing work described in [RFC-0003](RFC-0003-native-spi.md), with function registries to include function metadata.
-In both Java and C++, builtin functions have extra metadata () defined in FunctionMetadata class, which is used while computing estimated stats
+The ongoing work described in [RFC-0003](RFC-0003-native-spi.md), with function registries already includes function metadata as field .
+Since we are introducing fields inside the
+[FunctionMetadata.h](https://github.com/facebookincubator/velox/blob/0adc62e3aaf647596ab476f6300a4165e60f6b91/velox/expression/FunctionMetadata.h)
+the new fields have to be sent as is for further processing to the coordinator.
+
+In both Java and C++, builtin functions have extra metadata defined in FunctionMetadata class, which is used while computing estimated stats
 for optimizer.
 
-* __Phase 2__. Annotate some of the builtin scalar functions with appropriate annotations.
+### Phase 3: Annotate some of the builtin scalar functions with appropriate annotations.
 
-Note: At this stage an exhaustive list is not ready.
+See: [Appendix](#appendix) 1, for list of functions.
 
-List of functions:
-1. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/MathFunctions.java
-2. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/StringFunctions.java
-3. `getHash` in presto-main/src/main/java/com/facebook/presto/operator/scalar/CombineHashFunction.java 
-4. `yearFromTimestamp` in presto-main/src/main/java/com/facebook/presto/operator/scalar/DateTimeFunctions.java
+### Phase 4: Extend the support to non-built-in UDFs. Add documentation and blogs with usage examples.
 
+### Future work:
 
-A slice can represent a column or a constant string. In case of 
-
-* __Phase 3__. Extend the support to non-built-in UDFs. Add documentations and blogs with usage examples.
-
-* __Future work__.
-
+#### Define an expression language:
 The following example is a more powerful form of expressing how to estimate stats for functions based on their characteristics. Here,
-we propose the use of expressions ( i.e an expression language with a fixed grammar ) In the following example of `substr` :
+we propose the use of expressions ( i.e. an expression language with a fixed grammar ) In the following example of `substr` :
 For average row size we have used the value of length argument. For distinct values count it is more complex, e.g. if length is same as
 the upper bound for `varchar(x)` i.e. `x` , then use source stat `distinct values count` of the argument `utf8`. 
 ```java
@@ -414,6 +398,10 @@ the upper bound for `varchar(x)` i.e. `x` , then use source stat `distinct value
 
 `substr` is at the heart of all `LIKE %X` statements, which is widely used. Without a more powerful framework support it is difficult to support a stats estimation. 
 
+#### virtual function
+C++ [VectorFunction](https://github.com/facebookincubator/velox/blob/0adc62e3aaf647596ab476f6300a4165e60f6b91/velox/expression/VectorFunction.h) class definition to include
+virtual function which can be overridden by each function to provide how the source stats are transformed.
+
 ## Metrics
 
 How can we measure the impact of this feature?
@@ -425,20 +413,20 @@ How can we measure the impact of this feature?
 
 Based on the discussion, this may need to be updated with feedback from reviewers.
 
-* __Approach 1__. Trying to find a heuristic based mechanism to estimate functions cost, for example : A function takes a single argument of type `varchar(20)` and
+### Approach 1 Trying to find a heuristic based mechanism to estimate functions cost, for example : A function takes a single argument of type `varchar(20)` and
 returns the value of same type i.e. `varchar(20)` and is SCALAR and deterministic, then we can apply heuristic and say that source statistics can be propagated as is.
 
 Example 2: The input and output column do not match, input is `varchar(200)` and output is `varchar(10)`.Then we can say that average row size is changed.
 
-__Pros:__
+#### Pros
 
 * Minimum impact to the user and codebase. Since this feature can be 
 enabled/disabled using a session flag : `scalar_function_stats_propagation_enabled`
 
-__Cons:__
+#### Cons
 * Problem with heuristic based approach is unknown nature of functions, and thus it can be difficult to come up with heuristics that are always accurate.
 
-* __Approach 2__. Reference [1. Monsoon](#references). discusses various stochastic approaches to solve the same problem, a user provided stats calculator will complement such
+### Approach 2: Reference [1. Monsoon](#references). discusses various stochastic approaches to solve the same problem, a user provided stats calculator will complement such
 approaches as one could compute via statistical process for those functions user provided stats computation is unavailable. Sampling and other stochastic processes are beyond the
 scope for this RFC.
 
@@ -474,3 +462,12 @@ How do we ensure the feature works as expected? Mention if any functional tests/
    by Viktor Leis, Andrey Gubichev, Atans Mirchev, Peter Boncz, Alfons Kemper, Thomas Neumann
    PVLDB Volume 9, No. 3, 2015
    http://www.vldb.org/pvldb/vol9/p204-leis.pdf
+
+## Appendix
+
+1. List of functions: Note: At this stage an exhaustive list is not ready (WIP).
+   1. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/MathFunctions.java
+   2. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/StringFunctions.java
+   3. `getHash` in presto-main/src/main/java/com/facebook/presto/operator/scalar/CombineHashFunction.java
+   4. `yearFromTimestamp` in presto-main/src/main/java/com/facebook/presto/operator/scalar/DateTimeFunctions.java
+
