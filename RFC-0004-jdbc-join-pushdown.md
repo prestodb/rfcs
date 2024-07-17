@@ -174,7 +174,7 @@ For doing federated join pushdown (pushing down tables from multiple connector) 
 
 * On ApplyConnectorOptimization Optimizer, add new ConnectorPlanOptimizer called JdbcJoinPushdown
 
-* JdbcJoinPushdown needs to implement ConnectorPlanOptimizer and the optimze method use ConnectorPlanRewriter to rewrite the JoinNode to a TableScanNode
+* JdbcJoinPushdown needs to implement ConnectorPlanOptimizer and the optimize method use ConnectorPlanRewriter to rewrite the JoinNode to a TableScanNode
 
 * Handle JoinNode on JdbcJoinPushdown ConnectorPlanRewriter. 
 
