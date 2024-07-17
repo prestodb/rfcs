@@ -26,7 +26,8 @@ Another example : `is_null(COLUMN1)` could be annotated with `distinctValueCount
 Currently, we compute new stats for only a handful of functions (`CAST(...)`, `is_null(Slice)`, arithmetic operators) by using a hand rolled implementation in
 [`ScalarStatsCalculator`](https://github.com/prestodb/presto/blob/0.289-edge7/presto-main/src/main/java/com/facebook/presto/cost/ScalarStatsCalculator.java#L118))
 
-For other functions the optimizer cannot estimate statistics since it is unaware of how source stats need to be transformed.
+For other functions the optimizer cannot estimate statistics since it is unaware of how source stats need to be transformed. When these scalar functions appear in join
+clause, unknown stats are propagated. This results in suboptimal plan, following example from TPCDS q24 further illustrate this point. 
 [Related Issues](#related-issues) [1] and [2] are examples of queries we could have been optimized better if there was some way to 
 derive source stats. [VariableStatsEstimate](https://github.com/prestodb/presto/blob/0.289-edge7/presto-main/src/main/java/com/facebook/presto/cost/VariableStatsEstimate.java#L35)
 is used to store stats and `VariableStatsEstimate.unknown()` is propagated in cases where stats are missing (Shown below as `?` )
@@ -183,6 +184,32 @@ public class FunctionMetadata
 }
 ```
 
+Where `ScalarStatsHeader` looks like:
+
+```java
+public class ScalarStatsHeader
+{
+    private Map<Integer, ScalarPropagateSourceStats> argumentStatsResolver;
+    private double distinctValuesCount;
+    private double nullFraction;
+    private double avgRowSize;
+    private double min;
+    private double max;
+    //...
+    /*
+     * Get stats annotation for each of the scalar function argument, where key is the index of the position
+     * of functions' argument and value is the ScalarPropagateSourceStats annotation.
+     */
+    public Map<Integer, ScalarPropagateSourceStats> getArgumentStats()
+    {
+        return argumentStatsResolver;
+    }
+}
+```
+
+The field `argumentStatsResolver` is processed by parsing annotation `ScalarPropagateSourceStats` on functions. In the case of C++ implementation discussed in
+[phase 2](#phase-2-c-implementation) this is provided by `transformSourceStats` in `FunctionMetadata.h` and later embedded in json by `JsonBasedUdfFunctionMetadata`. 
+
 Examples of using above annotations for various function in `StringFunctions.java`
 
 1. upper(Slice)
@@ -197,6 +224,8 @@ Examples of using above annotations for various function in `StringFunctions.jav
         return toUpperCase(slice);
     }
 ```
+Annotation: `ScalarPropagateSourceStats` is by default `propagateAllStats = true` i.e. the stats estimate for `upper(col1)` function will be same as the source column(i.e. `col1`)
+stats. 
 
 2. starts_with(Slice, Slice): an example of constant stats.
 ```java
@@ -227,15 +256,15 @@ Examples of using above annotations for various function in `StringFunctions.jav
     public static Slice concat(
             @LiteralParameter("x") Long x,
             @ScalarPropagateSourceStats(
-                    nullFraction = USE_MAX_ARGUMENT,
+                    distinctValuesCount = NON_NULL_ROW_COUNT,
                     avgRowSize = SUM_ARGUMENTS,
-                    distinctValuesCount = ROW_COUNT) @SqlType("char(x)") Slice left,
+                    nullFraction = SUM_ARGUMENTS) @SqlType("char(x)") Slice left,
             @SqlType("char(y)") Slice right)
     { //...
 }
 ```
 
- __Propagate all stats but, for nullFraction, avgRowSize and distinctValuesCount follow as specified.__
+ __Propagate all stats but, for nullFraction and avgRowSize perform sum of source stats from `left` and `right`, distinctValuesCount is `NON_NULL_ROW_COUNT`.__
 
 4. An example of using both `ScalarFunctionConstantStats` and `ScalarPropagateSourceStats`.
 ```java
@@ -359,10 +388,40 @@ return {
 The ongoing work described in [RFC-0003](RFC-0003-native-spi.md), with function registries already includes function metadata as field .
 Since we are introducing fields inside the
 [FunctionMetadata.h](https://github.com/facebookincubator/velox/blob/0adc62e3aaf647596ab476f6300a4165e60f6b91/velox/expression/FunctionMetadata.h)
-the new fields have to be sent as is for further processing to the coordinator.
+the new fields have to be sent as is for further processing to the coordinator, a json response for `is_null` may look like:
 
-In both Java and C++, builtin functions have extra metadata defined in FunctionMetadata class, which is used while computing estimated stats
-for optimizer.
+```json
+{
+  "is_null": [
+    {
+      "docString": "is_null",
+      "functionKind": "SCALAR",
+      "outputType": "boolean",
+      "paramTypes": [
+        "T"
+      ],
+      "routineCharacteristics": {
+        "determinism": "DETERMINISTIC",
+        "language": "CPP",
+        "nullCallClause": "CALLED_ON_NULL_INPUT"
+      },
+      "statsCharacteristics": {
+        "constantStats": {
+          "distinctValuesCount": 2.0,
+          "nullFraction": 0.0,
+          "averageRowSize": 1.0
+        },
+        "transformSourceStats": {}
+      },
+      "schema": "prestissimo"
+    }
+  ]
+}
+```
+
+The side-car returns
+[JsonBasedUdfFunctionMetadata](https://github.com/prestodb/presto/blob/master/presto-function-namespace-managers/src/main/java/com/facebook/presto/functionNamespace/json/JsonBasedUdfFunctionMetadata.java)
+for all Velox functions to the co-ordinator. We would need to enhance this as well for the new Stats.
 
 ### Phase 3: Annotate some of the builtin scalar functions with appropriate annotations.
 
@@ -392,8 +451,6 @@ the upper bound for `varchar(x)` i.e. `x` , then use source stat `distinct value
     { //...
     }
 ```
-
-`substr` is at the heart of all `LIKE %X` statements, which is widely used. Without a more powerful framework support it is difficult to support a stats estimation. 
 
 #### virtual function
 C++ [VectorFunction](https://github.com/facebookincubator/velox/blob/0adc62e3aaf647596ab476f6300a4165e60f6b91/velox/expression/VectorFunction.h) class definition to include
@@ -464,9 +521,10 @@ How do we ensure the feature works as expected? Mention if any functional tests/
 
 ## Appendix
 
-1. List of functions: Note: At this stage an exhaustive list is not ready (WIP).
+1. List of functions:
    1. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/MathFunctions.java
    2. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/StringFunctions.java
    3. `getHash` in presto-main/src/main/java/com/facebook/presto/operator/scalar/CombineHashFunction.java
    4. `yearFromTimestamp` in presto-main/src/main/java/com/facebook/presto/operator/scalar/DateTimeFunctions.java
-
+      
+   Note: At this stage an exhaustive list is not ready (WIP).
