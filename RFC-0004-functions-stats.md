@@ -27,7 +27,7 @@ Currently, we compute new stats for only a handful of functions (`CAST(...)`, `i
 [`ScalarStatsCalculator`](https://github.com/prestodb/presto/blob/0.289-edge7/presto-main/src/main/java/com/facebook/presto/cost/ScalarStatsCalculator.java#L118))
 
 For other functions the optimizer cannot estimate statistics since it is unaware of how source stats need to be transformed. When these scalar functions appear in join
-clause, unknown stats are propagated. This results in suboptimal plan, following example from TPCDS q24 further illustrate this point. 
+clause, unknown stats are propagated. This results in suboptimal plan, following example query further illustrate this point. 
 [Related Issues](#related-issues) [1] and [2] are examples of queries we could have been optimized better if there was some way to 
 derive source stats. [VariableStatsEstimate](https://github.com/prestodb/presto/blob/0.289-edge7/presto-main/src/main/java/com/facebook/presto/cost/VariableStatsEstimate.java#L35)
 is used to store stats and `VariableStatsEstimate.unknown()` is propagated in cases where stats are missing (Shown below as `?` )
