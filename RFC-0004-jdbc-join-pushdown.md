@@ -229,7 +229,7 @@ For implementing connector level join pushdown, first we need JoinNode and make 
 
 We  have ApplyConnectorOptimization Optimizer to add connector specific plan optimizer. This Optimizer is created on application initialization and load values while read catalogue properties. Existing general flow for optimizer is as follows. 
 
-![ConnectorPlanOptimizer](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/7ff937c4-f3d8-40c1-acb8-80c540749f90)
+![ConnectorPlanOptimizer](RFC-0004-single_jdbc_join_pushdown/7_ConnectorPlanOptimizer.png) 
 
 
 #### New Changes required as part of this enhancement
@@ -295,7 +295,7 @@ While starting application, it build ‘ApplyConnectorOptimization’ with logic
 
 In presto, when we use a join query, presto create a PlanNode with JoinNode. JoinNode is a tree structure which can hold left and right table details, join conditions, projections and filter details. If there are multiple tables to join then it create a join tree structure where the left side of the JoinNode will be another JoinNode which hold sub joins to resolve multiple table.  The logical PlanNode is created in such a way, where the first table (which is the from clause table) is resolved first either from the left TableScanNode or from JoinNode hierarchy using left dept first algorithm, then its adjacent table (very next table) as right side.  So the order and position of the tables in the join query plays an important role to determine query pushdown. 
 
-![PlanNode](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/aa065f91-1472-4869-8c53-7a39cf43f77c)
+![PlanNode](RFC-0004-single_jdbc_join_pushdown/3_PlanNode.png) 
 
 In JoinPushdown optimiser, we need to traverse the JoinNode on left depth first manner. During traversal, if the left and right tables are from same connector and its join conditions are  from the same connector then it satisfies the  “join pushdown condition” and needs to create a ‘single table scan’ (join query builder) and replace JoinNode with ‘single table scan’ if the global pushdown flag is enabled. Then need to check with its parent JoinNode right table to match above “join pushdown condition”. If that also matches the connector and join condition then that table also add to previously created ‘single table scan’ and replace the JoinNode.  
 
@@ -317,7 +317,7 @@ JoinPushdown Rule or traverse algorithm should consider traversing the PlanNode 
 
 Here the JoinQuery with 3 tables (employee, department and project) which are from same connector (postgres) and the JoinNode tree structure for the PlanNod is generated with two join (JoinNode-1 and JoinNode-2) as follows.  JoinNode-1 left is another JoinNode-2 and its right is project table. JoinNode-1 is the left deep JoinNode which resolve ‘FROM’ table employee from its ‘left’ and next adjacent table department from its ‘right’.
 
-![rule_repsent_samecatalog](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/92736bb7-0032-40d0-bcd5-fa85a17f2bf9)
+![Optimization Rule](RFC-0004-single_jdbc_join_pushdown/8_rule_represent_same_catalogue.png) 
 
 In JoinPushdown Optimizer-Rule, the JoinNode is traversed on left depth first manner to find the left deep JoinNode and it will reach to the JoinNode-2. Now it check its left and right table with ‘join pushdwon condition’. As both tables staisfies the condition the Rule will create a 'new TableScanNode' which contain employee and department details and replace the JoinNode-2 with that 'new TableScanNode'.  Now it validate ‘join pushdown condition’ against this tree (parent) hierarchy and it observe 'new TableScanNode' as left and project table as right, which also satisfies the condition. So merging this children’s too, to the single TableScanNode by adding the project table to previously created ‘new TableScanNode’ and replace the JoinNode-1 with this ‘modified new TableScanNode’. Now there is no JoinNode but it is replaced with a single 'new TableScanNode' which contains all the table details (employee, department and project) as per the query table order.
 
@@ -325,17 +325,15 @@ In JoinPushdown Optimizer-Rule, the JoinNode is traversed on left depth first ma
 
 JoinPushdown Rule or traverse algorithm should consider traversing the JoinNode on left depth first to identify left deep JoinNode and then travers to its right JoinNode on left depth first then right. After traversing all JoinNode on this manner it will validate the resolved left table and right table of that visited JoinNode. For example if we have a PlanNode like below 
 
-![bushy1](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/0d04c10b-bccf-4df8-966b-3ae7fba89c31)
-
+![Bushy JoinNode](RFC-0004-single_jdbc_join_pushdown/9_bushy_org.png) 
 
 It should first go through the left of the JoinNode and should replace '2.left Join' with TableScanNode as '2.left Join' is a completed JoinNode with left and right are tables which satisfies the join condition. Then traverse through right (right is a JoinNode instead of TableScanNode) of the left visited JoinNode and should replace '4.left Join'. Here '4.left Join' satisfies the JoinPushdown Condition as the left and right of the tables of join are from same catalogue and join condition are from same catalogue. Here '3.right Join' tables are from same catalogue (after replace 4. left Join), but the join condition is from different catalogue. So while visit '3. right Join' it immediately return the node as it is, without replace that node and without traverse through the remaining parent node. The final output of the JdbcJoinPushdwon is as follows.
 
-
-![bushy2](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/a2089091-49a6-47d6-b23f-7c2460383c22)
+![Bushy JoinNode](RFC-0004-single_jdbc_join_pushdown/10_bushy1.png) 
 
 When we analyze the Presto created PlanNode for the same join query, it is observed that it is never created right part of the JoinNode as a JoinNode, instead it is always a TableScanNode. All the Join is hold under the left JoinNode hierarchy as follows. If that is the case then the optimizer code change will pushingdown the JoinNode '4. JoinNode', as it is the only node which satisfies the join pushdown condition. For federated query (multiple catalogue query), for pushingdown multiple catalog tables, presto should create above defined bushy PlanNode which is able to hold JoinNode on left and right of the Join. Creating bushy PlanNode is not planned on this scope.
 
-![PlanNode](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/15191445-d37e-4b75-815a-95a7cfcb6a62)
+![PlanNode](RFC-0004-single_jdbc_join_pushdown/3_PlanNode.png) 
 
 ## 4) JdbcJoinPushdown invoke from ApplyConnectorOptimization 
 
@@ -406,7 +404,7 @@ On JdbcJoinPushdown, we need to override visitJoin() and it will be invoke from 
 
 For this we need to introduce a new structure on JdbcTableHandle to hold all the table details as follows.
 
-![ts_structure1](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/ebe90497-04f2-4015-acb9-237f0ae31b97)
+![TableScanNode](RFC-0004-single_jdbc_join_pushdown/ts_structure1.png) 
 
 If the JoinNode is not satisfies the “JoinPushdown condition” then there should have an algorithm to traverse the JoinNode to left depth first and then right node left depth first to visit all the child node. This algorithm should travers JoinNode left/right child even though  the Node is  JoinNode, ProjectNode or FilterNode to get the leaf TableScanNode. After getting the leaf based on “JoinPushdown condition” it can be converted to TableScanNode.If we get other than JoinNode, ProjectNode, FilterNode or TableScanNode as left or right of JoinNode then we could skip the pushdown and able to return the node from there itself.
 
@@ -432,7 +430,7 @@ If the JoinNode is not satisfies the “JoinPushdown condition” then there sho
 
 After completing JdbcJoinPushdown optimization we have a PlanNode which contain TableScanNode with join table details. After all optimization process the final plan and fragment will create by presto engine and generate a split to execute on JdbcConnector. Now we need to get the join table details from TableScanNode and populate on split to get on connector level. Modify JdbcSplit to hold the details as follows.
 
-![split_structure1](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/224015e8-8cf1-4608-a4a8-cc5d8e4f9311)
+![TableScanNode](RFC-0004-single_jdbc_join_pushdown/split_structure1.png) 
 
 
 ## 8) Create Join Query on Connector Level using the split
