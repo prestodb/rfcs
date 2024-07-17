@@ -143,7 +143,6 @@ public @interface ScalarPropagateSourceStats
     StatsPropagationBehavior distinctValuesCount() default StatsPropagationBehavior.UNKNOWN;
     StatsPropagationBehavior avgRowSize() default StatsPropagationBehavior.UNKNOWN;
     StatsPropagationBehavior nullFraction() default StatsPropagationBehavior.UNKNOWN;
-    StatsPropagationBehavior histogram() default StatsPropagationBehavior.UNKNOWN;
 }
 ```
 
