@@ -78,11 +78,12 @@ FROM postgresql.public.orders o
 
 **Original presto plan performance**
 
-  <img width="1030" alt="Screenshot 2024-07-15 at 12 14 02 PM" src="https://github.com/user-attachments/assets/3e587e72-1fc4-48aa-bd44-c24b16bad674"> 
+![Original presto plan performance](RFC-0004-single_jdbc_join_pushdown/1_perf_wxd.png)
+
 
 **Joinpushdown presto plan performance**
 
-  <img width="1030" alt="Screenshot 2024-07-15 at 12 14 45 PM" src="https://github.com/user-attachments/assets/51e7f7a9-0017-425c-ac35-15d4a84a3f18">  
+![Joinpushdown presto plan performance](RFC-0004-single_jdbc_join_pushdown/2_perf_joinwxd.png)  
 
 ## Background
 
@@ -137,13 +138,15 @@ In presto, on Logical planning it converting the Query object  to  Presto Object
 
 Basically the PlanNode or the Plan is a tree datastructure which represent the sql query, and is able to understand and process by presto. When a join Query received on logical planning, presto create a PlanNode with JoinNode. JoinNode is a tree structure which can hold another node, left tables, right tables, join conditions, projections and filters related to that join query. If there are multiple tables to join then it create a join tree structure where the left side of the JoinNode will be another JoinNode which hold sub joins to resolve multiple table.  The logical PlanNode is created in such a way, where the first table (which is the from clause table) is resolved first either from the left TableScanNode or from JoinNode hierarchy using left dept first algorithm, then its adjacent table (very next table) as right side.  So the order and position of the tables in the join query plays an important role to determine query pushdown. Below is the example of PlanNode that created for the join query.
 
-![PlanNode](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/1c99d1ac-ff1f-4c76-9488-01c8a9b2cbb2)
+ ![PlanNode](RFC-0004-single_jdbc_join_pushdown/3_PlanNode.png) 
+
 
 For doing jdbc join pushdown, we need to create a new logical optimiser called JoinPushdown optimiser which is applicable only for JdbcConnector. In this optimizer the PlanNode tree traversal happen against connector specific JoinNode on left depth first manner. During left depth traversal, if the JoinNode left and right tables are from same connector,  and if join conditions is from same connector and if satisfies all other 'join pushdown condition' then it will create a new TableScanNode by replacing that JoinNode and merging that JoinNode left and right TableScanNode into single one. Then the left depth travesal reach to its parent JoinNode and validate left table, right table, join condition against the 'join pushdown condition'. If that also matches the connector and join condition then that table also add to previously created ‘single table scan’ and replace the JoinNode.  This JoinNode replacement to ‘single table scan’ will continue until the traversal find any fail case on 'join pushdown condition' or end the JoinNode hierarchy. Once it fail or complete then it will immediately return the node without traversing on remaining parent node or pushing down the remaining parent nodes. For the JoinNode which is not pushingdown (not converted to new TableScanNode) will follow presto default behaviour to handle the JoinNode.
 
 After JoinPushdown optimizer, the PlanNode ensure only one TableScanNode against the JoinNode if the JoinNode matches 'join pushdown condition'. So there is only one split is generated and not break the join query to multiple select statement for the JoinNode which satisfies 'join pushdown condition'. Now the single new TableScanNode split will transfer to the connector and the connector will generate the join query from the new TableScanNode split as it contains all the tables and join conditions related to that join query.
 
-![joinpushdown_summary](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/b0b4bddb-5ef9-40fc-a51f-d6c34ba36bdb)
+![Join Pushdown Summary](RFC-0004-single_jdbc_join_pushdown/4_joinpushdown_summary.png) 
+
 
 #### Join pushdowns for bushy trees & queries involving multiple connectors
 
@@ -153,8 +156,7 @@ Presto always produces a left deep Join tree for a PlanNode (JoinNode). The Join
 
 That is, for a join query the left always resolve from 'FROM' clause table. So if we use a federated join query (which involves multiple connectors) we could pushdown all the tables of the connector which is defined as 'FROM' table. No other connector tables are going to pushing down as the left is always resolve from 'FROM' clause table and the right is the other connector level table. Below is the possible pushdown if we use postgres table as from table.
 
-
-![PlanNode_optimized](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/77ff4b8c-3d25-4d1c-800c-d8885791407a)
+![Optimized PlanNode](RFC-0004-single_jdbc_join_pushdown/5_PlanNode_optimized.png) 
 
 
 For doing federated join pushdown (pushing down tables from multiple connector) either we need to group the tables based on connector or need to rewrite the PlanNode to build right JoinNode instead of TableScanNode (bushy join). It is not planning on this proposal and here we are planning to pushing down all the tables from the single connector which is defined as 'FROM' clause.
@@ -163,7 +165,8 @@ For doing federated join pushdown (pushing down tables from multiple connector) 
 
 #### Below is the detailed flow for jdbc join pushdown.
 
-![join_pushdown_detailed_design](https://github.com/Ajas-Mangal/jdbc-join-pushdown/assets/175085180/26c4ba30-28aa-47c5-991a-2abebac79ac1)
+![Jdbc Join Pushdown](RFC-0004-single_jdbc_join_pushdown/6_join_pushdown_detailed_design.png) 
+
 
 #### Below are new points that Proposed for Join Pushdown Implementation
 
