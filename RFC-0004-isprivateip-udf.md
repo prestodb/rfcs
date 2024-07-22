@@ -30,7 +30,7 @@ if the argument is a private IP address and `false` otherwise. The actual checks
 
 ## Other Approaches Considered
 
-This function is more efficient to implement on integer representations of IP addresses but we lack of 128-bit integers.
+This function is more efficient to implement on integer representations of IP addresses, but we lack 128-bit integers.
 We could write a new Java UDF that uses `BigInteger` but it seems like the SQL functions are preferred at this point.
 
 ## Adoption Plan
