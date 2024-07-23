@@ -7,7 +7,7 @@ Proposers
 
 ## Summary
 
-Create `is_private_ip` UDF that checks whether an IP address is within private or reserved range that is not globally reachable. We take our definitions from what IANA considers not "globally reachable" in
+Create `is_private_ip` function that checks whether an IP address is within private or reserved range that is not globally reachable. We take our definitions from what IANA considers not "globally reachable" in
 https://www.iana.org/assignments/iana-ipv4-special-registry/iana-ipv4-special-registry.xhtml and
 https://www.iana.org/assignments/iana-ipv6-special-registry/iana-ipv6-special-registry.xhtml.
 
