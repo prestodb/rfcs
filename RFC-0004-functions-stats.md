@@ -430,6 +430,38 @@ See: [Appendix](#appendix) 1, for list of functions.
 
 ### Future work:
 
+#### Categorize functions based on Accuracy confidence level
+
+Annotated stats for a function may be a reasonable estimate or an accurate fact, or somewhere in between accurate and reasonable estimate. An accuracy confidence level will 
+replace `scalar_function_stats_propagation_enabled` true or false to `scalar_function_stats_propagation_accuracy` value will be in **[low, medium, high, accurate, none]**
+
+* `none` will turn off this feature completely 
+* `accurate` will propagate stats for only those functions which are marked as having accurate stats.
+* similarly `low`, `medium` and `high` can be set up. With `low` being the most permissible mode, i.e. 
+    functions with `low` as configured accuracy for stats will have their stats propagated.
+
+A few examples:
+
+1. String function `reverse(Col)` configured with `propagateAllStats=true` the accuracy confidence level is `accurate` for this function.
+2. String function `upper(Col)` configured with `propagateAllStats=true` the accuracy confidence level is `medium` for this function as NDV can vary if the input records have
+    entries with same string as upper case and lower case.
+3. An example of `low` accuracy confidence level is concat function, 
+```java
+@Description("concatenates given character strings")
+@ScalarFunction
+@LiteralParameters({"x", "y", "u"})
+@Constraint(variable = "u", expression = "x + y")
+@SqlType("char(u)")
+public static Slice concat(@LiteralParameter("x") Long x,
+        @ScalarPropagateSourceStats(
+                nullFraction = SUM_ARGUMENTS,
+                avgRowSize = SUM_ARGUMENTS,
+                distinctValuesCount = NON_NULL_ROW_COUNT) @SqlType("char(x)") Slice left,
+        @SqlType("char(y)") Slice right)
+{ /*...*/ }
+```
+where distinct values count is an estimated value assuming every non null entry is unique, which may not be always true. 
+
 #### Define an expression language:
 The following example is a more powerful form of expressing how to estimate stats for functions based on their characteristics. Here,
 we propose the use of expressions ( i.e. an expression language with a fixed grammar ) In the following example of `substr` :
