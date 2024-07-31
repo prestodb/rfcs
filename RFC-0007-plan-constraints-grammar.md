@@ -29,37 +29,52 @@ In this first cut, users can build constraints to control
 - Join orders and distributions for INNER JOIN's
 - Cardinality (row counts) for base relations and join sub-plans
 
-### Grammar
+### Grammar (ANTLR 4)
 
 ```
-planConstraintString : /*! planConstraint [, ...] */
+grammar planConstraints;
 
-planConstraint : joinConstraint
-| cardinalityConstraint
+// Lexer rules
+NUMBER     : [0-9]+ ; // Matches one or more digits
+LOJ        : 'LOJ' ;
+ROJ        : 'ROJ' ;
+IJ         : 'IJ' ;
+LPAREN     : '(' ;
+RPAREN     : ')' ;
+WS         : [ \t\r\n]+ -> skip ; // Skip whitespace
+IDENTIFIER : ~[()]+ ; // Matches one or more characters that are not '(' or ')'
+JOIN_DIST_PARTITIONED : '[P]' ;
+JOIN_DIST_REPLICATED : '[R]' ;
+CARD : 'CARD' ;
+JOIN : 'JOIN' ;
+CONSTRAINTS_START_MARKER :'/*!';
+CONSTRAINTS_END_MARKER :'*/';
 
-joinConstraint : joinType (joinNode) [distributionType]
+relationName
+    : relationName (joinType=LOJ | joinType=ROJ | joinType=IJ)? relationName (attribute=JOIN_DIST_PARTITIONED | attribute=JOIN_DIST_REPLICATED)? # withJoinType
+    | LPAREN relationName RPAREN # Grouping
+    | IDENTIFIER # standaloneRelation
+    ;
 
-cardinalityConstraint : CARD (joinNode cardinality)
+joinType
+    : LOJ
+    | ROJ
+    | IJ
+    ;
 
-distributionType : [P]
-   | [R]
+cardinalityConstraint : CARD LPAREN relationName NUMBER RPAREN;
 
-joinType : JOIN	(defaults to inner join)
-| IJ
-| LOJ
-| ROJ
+joinConstraint : JOIN LPAREN relationName RPAREN;
 
-cardinality : integer constant (positive)
+planConstraint 
+    :joinConstraint
+    | cardinalityConstraint;
 
-joinNode : (relationName relationName [, ...])
+planConstraintString : CONSTRAINTS_START_MARKER planConstraint (WS planConstraint)* CONSTRAINTS_END_MARKER;
 
-| joinConstraint
+// Start rule
+start: planConstraintString EOF;
 
-| (relationName joinNode)
-
-| (joinNode relationName)
-
-| (joinNode joinNode [, ...])
 ```
 
 
@@ -71,7 +86,38 @@ joinNode : (relationName relationName [, ...])
     3. If an inner join condition does not exist between nodes a CrossJoin is automatically inferred
 2. Cardinality constraints -
     1. `card (c 10)` - Set the output row count estimate of `c` to `10` 
-    2. `card ((c o) 10)` - When considering a join node of shape `(c o)` set the output row count estimate to `10`
+    2. `card ((c o) 10)` - When/If considering a join node of shape `(c o)` set the output row count estimate to `10`
+3. Both type of constraints -
+    `join (c o) card ((c o) 10)` - Force a join-sub-graph of nodes `c InnerJoin o`. For this join node, set the output row count estimate to `10`
+
+#### Full SQL examples of queries with constraints
+
+Force the join of `c` and `cte` which is otherwise ignored, see [19354](https://github.com/prestodb/presto/issues/19354) 
+```
+/*! join ((c cte) n) */
+-- 
+with cte as (
+    select min(orderkey) as min
+    from orders
+)
+select count(*)
+from customer c,
+    nation n,
+    cte
+where c.custkey = cte.min
+    and n.nationkey = c.nationkey
+```
+
+Force the inner join of `l` and `o`, which is otherwise ignored, see [19894](https://github.com/prestodb/presto/issues/19894) 
+```
+/*! join (s (l o)) */
+select 1
+from supplier s,
+    lineitem l,
+    orders o
+where l.orderkey = o.orderkey
+```
+
 
 ### Other points of note
-- Relation names loosely resolve to WITH query aliases (CTE definitions) and table names.A detailed description of the name resolution is out of scope of this RFC (this will be covered in the implementation PR description)
+- Relation names loosely resolve to WITH query aliases (CTE definitions), table names and aliases. A detailed description of the name resolution is out of scope of this RFC (this will be covered in the implementation PR description)
