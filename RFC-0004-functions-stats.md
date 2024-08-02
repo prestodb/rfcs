@@ -233,7 +233,7 @@ stats.
     @ScalarFunction("starts_with")
     @LiteralParameters({"x", "y"})
     @SqlType(StandardTypes.BOOLEAN)
-    @ScalarFunctionConstantStats(distinctValuesCount = 2, minValue = 0, maxValue = 1)
+    @ScalarFunctionConstantStats(distinctValuesCount = 2)
     public static Boolean startsWith(@SqlType("varchar(x)") Slice x, @SqlType("varchar(y)") Slice y)
     {
         if (x.length() < y.length()) {
