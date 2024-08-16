@@ -1,4 +1,4 @@
-# **RFC0004 for Presto**
+# **RFC0005 for Presto**
 
 ## Propagate statistics for SCALAR functions
 
@@ -552,10 +552,10 @@ How do we ensure the feature works as expected? Mention if any functional tests/
 
 ## Appendix
 
-1. List of functions:
-   1. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/MathFunctions.java
-   2. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/StringFunctions.java
-   3. `getHash` in presto-main/src/main/java/com/facebook/presto/operator/scalar/CombineHashFunction.java
-   4. `yearFromTimestamp` in presto-main/src/main/java/com/facebook/presto/operator/scalar/DateTimeFunctions.java
-      
-   Note: At this stage an exhaustive list is not ready (WIP).
+### List of functions:
+ 1. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/MathFunctions.java
+ 2. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/StringFunctions.java
+ 3. `getHash` in presto-main/src/main/java/com/facebook/presto/operator/scalar/CombineHashFunction.java
+ 4. `yearFromTimestamp` in presto-main/src/main/java/com/facebook/presto/operator/scalar/DateTimeFunctions.java
+    
+ Note: At this stage an exhaustive list is not ready (WIP).
