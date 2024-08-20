@@ -32,17 +32,16 @@ In this first cut, users can build constraints to control
 ### Grammar (ANTLR 4)
 
 ```
-grammar planConstraints;
+grammar PlanConstraints;
 
 // Lexer rules
-NUMBER     : [0-9]+ ; // Matches one or more digits
+WS         : [ \t\r\n]+ -> skip ;
+NUMBER     : [0-9]+ ;
 LOJ        : 'LOJ' ;
 ROJ        : 'ROJ' ;
 IJ         : 'IJ' ;
 LPAREN     : '(' ;
 RPAREN     : ')' ;
-WS         : [ \t\r\n]+ -> skip ; // Skip whitespace
-IDENTIFIER : ~[()]+ ; // Matches one or more characters that are not '(' or ')'
 JOIN_DIST_PARTITIONED : '[P]' ;
 JOIN_DIST_REPLICATED : '[R]' ;
 CARD : 'CARD' ;
@@ -50,10 +49,34 @@ JOIN : 'JOIN' ;
 CONSTRAINTS_START_MARKER :'/*!';
 CONSTRAINTS_END_MARKER :'*/';
 
-relationName
-    : relationName (joinType=LOJ | joinType=ROJ | joinType=IJ)? relationName (attribute=JOIN_DIST_PARTITIONED | attribute=JOIN_DIST_REPLICATED)? # withJoinType
-    | LPAREN relationName RPAREN # Grouping
-    | IDENTIFIER # standaloneRelation
+fragment DIGIT
+    : [0-9]
+    ;
+
+fragment LETTER
+    : [A-Z]
+    | [a-z]
+    ;
+
+IDENTIFIER
+    : (LETTER | '_') (LETTER | DIGIT | '_' | '@' | ':')*
+    ;
+
+identifier
+    : IDENTIFIER
+    ;
+
+standAloneRelation
+    : identifier
+    ;
+
+groupedRelation
+    : LPAREN joinedRelation RPAREN
+    ;
+
+joinTypeOrDefault
+    : joinType
+    | { "IJ" } // Default value
     ;
 
 joinType
@@ -62,18 +85,32 @@ joinType
     | IJ
     ;
 
-cardinalityConstraint : CARD LPAREN relationName NUMBER RPAREN;
+joinAttribute
+    : JOIN_DIST_PARTITIONED
+    | JOIN_DIST_REPLICATED
+    ;
 
-joinConstraint : JOIN LPAREN relationName RPAREN;
+joinedRelation
+    : standAloneRelation joinTypeOrDefault standAloneRelation (joinAttribute)? #ss
+    | standAloneRelation joinTypeOrDefault groupedRelation (joinAttribute)? #sg
+    | groupedRelation joinTypeOrDefault standAloneRelation (joinAttribute)? #gs
+    | groupedRelation joinTypeOrDefault groupedRelation (joinAttribute)? #gg
+    ;
 
-planConstraint 
-    :joinConstraint
+
+cardinalityConstraint
+    : CARD LPAREN joinedRelation NUMBER RPAREN
+    | CARD LPAREN standAloneRelation NUMBER RPAREN
+    ;
+
+joinConstraint : JOIN LPAREN joinedRelation RPAREN;
+
+planConstraint
+    : joinConstraint
     | cardinalityConstraint;
 
-planConstraintString : CONSTRAINTS_START_MARKER planConstraint (WS planConstraint)* CONSTRAINTS_END_MARKER;
+planConstraintString : CONSTRAINTS_START_MARKER (planConstraint)* CONSTRAINTS_END_MARKER;
 
-// Start rule
-start: planConstraintString EOF;
 
 ```
 
@@ -82,13 +119,13 @@ start: planConstraintString EOF;
 
 1. Inner Join constraints - 
     1. `join (a (b c))` - Join the relations a,b,c as a right deep tree (denoted by the brackets). Use regular rules for determining join distribution
-    2. `join (((a c) [R] b) [P])` - In addition to the join order, use a  REPLICATED `[R]`  join for sub-plan `(a c)`  and PARTITIONED `[P]`  for `(a c) b`
+    2. `join ((a c [R]) b [P])` - In addition to the join order, use a  REPLICATED `[R]`  join for sub-plan `(a c)`  and PARTITIONED `[P]`  for `(a c) b`
     3. If an inner join condition does not exist between nodes a CrossJoin is automatically inferred
 2. Cardinality constraints -
     1. `card (c 10)` - Set the output row count estimate of `c` to `10` 
-    2. `card ((c o) 10)` - When/If considering a join node of shape `(c o)` set the output row count estimate to `10`
+    2. `card (c o 10)` - When/If considering a join node of shape `(c o)` set the output row count estimate to `10`
 3. Both type of constraints -
-    `join (c o) card ((c o) 10)` - Force a join-sub-graph of nodes `c InnerJoin o`. For this join node, set the output row count estimate to `10`
+    `join (c o) card (c o 10)` - Force a join-sub-graph of nodes `c InnerJoin o`. For this join node, set the output row count estimate to `10`
 
 #### Full SQL examples of queries with constraints
 
@@ -120,4 +157,4 @@ where l.orderkey = o.orderkey
 
 
 ### Other points of note
-- Relation names loosely resolve to WITH query aliases (CTE definitions), table names and aliases. A detailed description of the name resolution is out of scope of this RFC (this will be covered in the implementation PR description)
+- Relation names loosely resolve to WITH query aliases (CTE definitions), table names and aliases. A detailed description of the name resolution is out of scope of this RFC (this will be covered in the description of the implementation PR)
