@@ -521,12 +521,10 @@ scope for this RFC.
 
 - What impact (if any) will there be on existing users? Are there any new session parameters, configurations, SPI updates, client API updates, or SQL grammar?
 
-
-Functions without this annotation will not be affect, to remain backwards compatible those functions without this Annotation will run as is. A new session flag,
-`scalar_function_stats_propagation_enabled` and a new feature config will be introduced i.e. `optimizer.scalar-function-stats-propagation-enabled`,
+A new session flag, `scalar_function_stats_propagation_enabled` and a new feature config will be introduced i.e. `optimizer.scalar-function-stats-propagation-enabled`,
 by setting this session flag or feature flag, this feature can be turned on or off.
 
-The existing users are not impacted, as we are not changing any existing APIs, however those who wish to leverage new API can migrate their functions. 
+The existing users are not impacted, as we are not changing any existing APIs, however those who wish to leverage the benefits of function stats propagation, can migrate their functions by adding above mentioned annotations (in case of JAVA) or including stats information in `VectorFunctionMetadata` for C++ functions. 
 
 
 - How should this feature be taught to new and existing users? Basically mention if documentation changes/new blog are needed?
@@ -557,5 +555,3 @@ How do we ensure the feature works as expected? Mention if any functional tests/
  2. All functions in presto-main/src/main/java/com/facebook/presto/operator/scalar/StringFunctions.java
  3. `getHash` in presto-main/src/main/java/com/facebook/presto/operator/scalar/CombineHashFunction.java
  4. `yearFromTimestamp` in presto-main/src/main/java/com/facebook/presto/operator/scalar/DateTimeFunctions.java
-    
- Note: At this stage an exhaustive list is not ready (WIP).
