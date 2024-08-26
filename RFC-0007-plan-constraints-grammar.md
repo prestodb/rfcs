@@ -18,7 +18,15 @@ This document proposes a grammar for specifying plan constraints
 
 ## Background
 
-Plan constraints can be used to lock down critical aspects of an execution plan, such as access method, join method, and join order. 
+Plan constraints can be used to lock down critical aspects of an execution plan, such as access method, join method, and join order.
+
+Most commercially available cost-based optimizers support some form by which a user could express plan constraints that enable these two use-cases. Common terms used by DB vendors to describe this set of features include "plan constraints", "optimization guidelines" or "plan hints".
+
+There are two broad approaches as to how these plan constraints are stored and represented. Vendors such as [Oracle](https://docs.oracle.com/cd/B10500_01/server.920/a96533/hintsref.htm) & [Vertica](https://www.vertica.com/docs/10.0.x/HTML/Content/Authoring/SQLReferenceManual/LanguageElements/Hints/Hints.htm) provide a grammar/syntax where the plan constraint may be expressed inline with the sql query. The parser then picks up the constraint, validates it, and then passes it on to the query optimizer. 
+
+Other systems such as [DB2](https://www.ibm.com/docs/en/db2/11.1?topic=guidelines-creating-statement-level-optimization) and [SqlServer](https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-query?view=sql-server-ver16), provide mechanisms to specify and store these optimization guidelines independent of a sql query, allow the database to map these stored plan constraints to an incoming query and then pass these constraints on to the optimizer as applicable.
+
+Let us call these two approaches – inline plan constraints vs independent plan constraints.
 
 
 ## Proposed Implementation
