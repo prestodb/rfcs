@@ -162,7 +162,7 @@ GroupInnerJoinsByConnector optimizer is a PlanOptimizer which is responsible for
 GroupInnerJoinsByConnector optimizer will work on MultiJoinNode and will group TableScanNode based on connector name if the connector support join pushdown. This optimizer will create a single TableScanNode by using a new data structure called ConnectorTableHandleSet from the grouped TableScanNode. ConnectorTableHandleSet is a set of ConnectorTableHandle which is generated from grouped TableScanNode. This optimizer also create a combined overall predicate and overall assignments for the ConnectorTableHandleSet and will added to the newly created TableScanNode structure. This newly created TableScanNode structure will replace with the source list of MultiJoinNode.
 GroupInnerJoinsByConnector optimizer then work for re-creating join node with updated MultiJoinNode structure. The low level design is available in the session <GroupInnerJoinsByConnector optimizer>
 
-![Joinpushdown presto plan performance](RFC-0009-jdbc-join-push-down/after_Group_opt.png)  
+![After GroupInnerJoinsByConnector Optimizer](RFC-0009-jdbc-join-push-down/after_Group_opt.png)  
 
 JdbcJoinPushdown optimizer is a ConnectorPlanOptimizer, specific to jdbc tables and it generate a single JdbcTableHandle from the grouped ConnectorTableHandle. The low level design is available in the session <JdbcJoinPushdown optimizer>
 
@@ -170,7 +170,7 @@ JdbcJoinPushdown optimizer is a ConnectorPlanOptimizer, specific to jdbc tables 
 
 After GroupInnerJoinsByConnector optimizer and JdbcJoinPushdown optimizer, we will invoke existing Predicatepushdown optimizer. PredicatePushdown optimizer will pushdown the filter and join criteria to the re-created JoinNode using the overall predicate and overall assignment. 
 
-[Joinpushdown presto plan performance](RFC-0009-jdbc-join-push-down/after_predicate.png)
+[Predicatepushdown optimizer](RFC-0009-jdbc-join-push-down/after_predicate.png)
 
 After Predicatepushdown optimizer the flow will invoke existing JdbcComputePushdown optimizer and it will pushdown the overall join criteria to the additional predicates.
 
