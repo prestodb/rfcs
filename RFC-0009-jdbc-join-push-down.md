@@ -7,6 +7,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for instructions on creating your RFC and
 Proposers
 
 * Ajas M M
+* Haritha K
+* Thanzeel Hassan
+* Glerin Pinhero
 
 
 ## Related Issues
