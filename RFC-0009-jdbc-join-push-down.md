@@ -99,7 +99,11 @@ At present, if presto get a join query (from the CLI or UI) which is trying to j
 
 ![Joinpushdown presto plan performance](RFC-0009-jdbc-join-push-down/basic_wrk.png)  
 
-Currently for the join query, presto create a final plan which contains separate TableScanNode for each table that participated on join query and this TableScanNode info is used by the connector to create the select query. On top of this select query result, presto apply join condition and other predicate to provide the final result.
+Basically the PlanNode or the Plan is a tree datastructure which represent the sql query. When a join Query received on logical planning, presto create a PlanNode with JoinNode. JoinNode is a tree structure which can hold another node, left tables, right tables, join conditions, projections and filters related to that join query. If there are multiple tables to join then it create a join tree structure where the left side of the JoinNode will be another JoinNode which hold sub joins to resolve multiple table.  The logical PlanNode is created in such a way, where the first table (which is the from clause table) is resolved first either from the left TableScanNode or from JoinNode hierarchy using left dept first algorithm, then its adjacent table (very next table) as right side.  So the order and position of the tables in the join query plays an important role to determine query pushdown. Below is the example of PlanNode that created for the join query.
+
+ ![PlanNode](RFC-0009-jdbc-join-push-down/Existing_prestoPlan.png) 
+
+Currently while executing a JoinNode, presto create separate TableScanNode for each table that participated on join query and this TableScanNode info is used by the connector to create the select query. On top of this select query result, presto apply join condition and other predicate to provide the final result.
 
 ![Joinpushdown presto plan performance](RFC-0009-jdbc-join-push-down/cur_join_wrks.png) 
 
@@ -158,10 +162,19 @@ GroupInnerJoinsByConnector optimizer is a PlanOptimizer which is responsible for
 GroupInnerJoinsByConnector optimizer will work on MultiJoinNode and will group TableScanNode based on connector name if the connector support join pushdown. This optimizer will create a single TableScanNode by using a new data structure called ConnectorTableHandleSet from the grouped TableScanNode. ConnectorTableHandleSet is a set of ConnectorTableHandle which is generated from grouped TableScanNode. This optimizer also create a combined overall predicate and overall assignments for the ConnectorTableHandleSet and will added to the newly created TableScanNode structure. This newly created TableScanNode structure will replace with the source list of MultiJoinNode.
 GroupInnerJoinsByConnector optimizer then work for re-creating join node with updated MultiJoinNode structure. The low level design is available in the session <GroupInnerJoinsByConnector optimizer>
 
+![Joinpushdown presto plan performance](RFC-0009-jdbc-join-push-down/after_Group_opt.png)  
 
 JdbcJoinPushdown optimizer is a ConnectorPlanOptimizer, specific to jdbc tables and it generate a single JdbcTableHandle from the grouped ConnectorTableHandle. The low level design is available in the session <JdbcJoinPushdown optimizer>
 
-After GroupInnerJoinsByConnector optimizer and JdbcJoinPushdown optimizer, we will invoke existing Predicatepushdown optimizer. PredicatePushdown optimizer will pushdown the filter and join criteria to the re-created JoinNode using the overall predicate and overall assignment. After Predicatepushdown optimizer the flow will invoke existing JdbcComputePushdown optimizer and it will pushdown the overall join criteria to the additional predicates.
+
+
+After GroupInnerJoinsByConnector optimizer and JdbcJoinPushdown optimizer, we will invoke existing Predicatepushdown optimizer. PredicatePushdown optimizer will pushdown the filter and join criteria to the re-created JoinNode using the overall predicate and overall assignment. 
+
+[Joinpushdown presto plan performance](RFC-0009-jdbc-join-push-down/after_predicate.png)
+
+After Predicatepushdown optimizer the flow will invoke existing JdbcComputePushdown optimizer and it will pushdown the overall join criteria to the additional predicates.
+
+
 
 After all optimization the PlanNode will pass to the Jdbc to create the final join query. The final join query is prepared at the connector level using the Querybulder. We will explain the specific implementation in the low level design session.
 
@@ -205,6 +218,12 @@ Note: Presto inferencing sometime remove Join operation pushdown capability spec
 Note: This flag is a tech preview specific and default value is enable-join-query-pushdown=false. For enable Join pushdown capabilities we need to update enable-join-query-pushdown=true through backend and then do a presto server restart. After enabling the flag, you are able to pushdown equi-join and non equi-join queries. 
 
 In future release we will remove this global flag and bring as session properties to enable pushdown. If you enable that session properties it will pushdown equi-join queries. To enable non equi-join pushdown you need to enable another session flag  and will confirm on later stage.
+
+## Low level Design
+
+
+
+
 
 ## [Optional] Metrics
 
