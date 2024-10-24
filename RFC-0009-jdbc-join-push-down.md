@@ -179,7 +179,7 @@ After Predicatepushdown optimizer the flow will invoke existing JdbcComputePushd
 After all optimization the PlanNode will pass to the Jdbc to create the final join query. The final join query is prepared at the connector level using the Querybulder. We will explain the specific implementation in the low level design session.
 
 
-**Join query pushdown in presto Jdbc datasource**
+## Join query pushdown in presto Jdbc datasource
 
 Presto validate Join operation (PlanNode) spec to perform join pushdown. The specifics for the supported pushdown of table joins varies for each data source, and therefore for each connector. However, there are some generic conditions that must be met in order for a join to be pushed down in jdbc connector
 
