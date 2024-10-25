@@ -223,6 +223,31 @@ In future release we will remove this global flag and bring as session propertie
 
 
 
+For performing Jdbc JoinPushdown we required below implementations :
+
+1. Create new PlanOptimizer called GroupInnerJoinsByConnector for JdbcJoinPushdown
+
+2. Load GroupInnerJoinsByConnector optimizer based on session flag
+
+3. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
+
+4. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
+
+5. Use MultiJoinNode to group Jdbc Tables based on connector name 
+
+6. Build join relation for the grouped tables from all the join predicates
+
+7. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
+
+8. Recreate left deep join node from the MultiJoinNode source list
+
+9. Build overall filter for the newly created join node
+
+10. Enable JdbcJoinPushdown at connector level 
+
+11. Pushdown the overall filter to the newly created TableScanNode.
+
+12. Create JoinQuery based on JdbcConnector
 
 
 ## [Optional] Metrics
