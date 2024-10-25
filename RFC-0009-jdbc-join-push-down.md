@@ -1,7 +1,5 @@
 # **RFC0009-jdbc-join-push-down for Presto**
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for instructions on creating your RFC and the process surrounding it.
-
 ## Jdbc join pushdown in presto
 
 Proposers
