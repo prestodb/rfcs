@@ -177,9 +177,13 @@ Presto Jdbc connector will process almost every Join operation except presto fun
 When we use some aggregate, math operations or datatype conversion along with join query it is converted to presto functions and applied to Join operation. Any join query which creates intermediate presto functions, cannot be handled by the connector and hence will not be pushed down.
 
 
-| No | Condition which create presto function                   | SQL Query                                                         |
+| No | Condition which create presto function                   | SQL Query                                    |
 |----|-------------------------------------|-------------------------------------------------------------------|
-| 1  | abs(int_clumn) = int_cilumn2        | `<Add Query>`                    |
+| 1  | abs(int_clumn) = int_cilumn2        | `SELECT b.book_id, b.copies_available, b.year_published,          |
+|    |                                     |  l.total_seating_capacity, l.number_of_staff                      | 
+|    |                                     |  FROM posgres_tp.pg.books b                                       |
+|    |                                     |  JOIN posgres_tp.pg.libraries l                                   |
+|    |                                     |  ON ABS(b.library_id) = l.library_id;`                            |
 | 2  | int_sum_column = int_value1_column1+int_value1_column2       | `<Add query>` 
 | 3  | cast(varchar_20_column, varchar(100) )= varchar100_column       | `<Add query>` 
 
@@ -190,7 +194,7 @@ Note: Presto inferencing sometime remove Join operation pushdown capability spec
 
 3) Join criteria (joining column) should create using Datatype and operators that support join pushdown. 
 
-| No | DataType support join pushdown                   | Operations                                                         |
+| No | DataType support join pushdown                   | Operations                                           |
 |----|-------------------------------------|-------------------------------------------------------------------|
 | 1  | <datatype>        | `=, <, >, <=, >=, !=, <>`                    |
 | 2  | <datatype2>       | `=, <, >, <=, >=, !=, <>`  
