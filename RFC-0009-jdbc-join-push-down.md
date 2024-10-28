@@ -154,13 +154,9 @@ GroupInnerJoinsByConnector optimizer is a PlanOptimizer which is responsible for
 GroupInnerJoinsByConnector optimizer will work on MultiJoinNode and will group TableScanNodes based on connector name if the connector supports join pushdown. This optimizer will create a single TableScanNode by using a new data structure called ConnectorTableHandleSet from the grouped TableScanNode. ConnectorTableHandleSet is a set of ConnectorTableHandles which is generated from grouped TableScanNode. This optimizer also creates a combined overall predicate and overall assignments for the ConnectorTableHandleSet and will add these to the newly created TableScanNode. This newly created TableScanNode structure will replace the source list of MultiJoinNode.
 GroupInnerJoinsByConnector optimizer will then work on re-creating join node with updated MultiJoinNode structure. The low level design is available [here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#low-level-design)
 
-<GroupInnerJoinsByConnector optimizer>
-
 ![After GroupInnerJoinsByConnector Optimizer](RFC-0009-jdbc-join-push-down/after_Group_opt.png)  
 
-JdbcJoinPushdown optimizer is a ConnectorPlanOptimizer, specific to jdbc tables and it generate a single JdbcTableHandle from the grouped ConnectorTableHandle. The low level design is available in the session <JdbcJoinPushdown optimizer>
-
-
+JdbcJoinPushdown optimizer is a ConnectorPlanOptimizer, specific to jdbc tables and it generate a single JdbcTableHandle from the grouped ConnectorTableHandle. The low level design is available [here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#low-level-design)
 
 After GroupInnerJoinsByConnector optimizer and JdbcJoinPushdown optimizer, we will invoke existing Predicatepushdown optimizer. PredicatePushdown optimizer will pushdown the filter and join criteria to the re-created JoinNode using the overall predicate and overall assignment. 
 
@@ -168,21 +164,17 @@ After GroupInnerJoinsByConnector optimizer and JdbcJoinPushdown optimizer, we wi
 
 After Predicatepushdown optimizer the flow will invoke existing JdbcComputePushdown optimizer and it will pushdown the overall join criteria to the additional predicates.
 
-
-
-After all optimization the PlanNode will pass to the Jdbc to create the final join query. The final join query is prepared at the connector level using the Querybulder. We will explain the specific implementation in the low level design session.
-
+After all optimization the PlanNode will pass to the presto-base-jdbc module to create the final join query. The final join query is prepared at the connector level using the Querybuilder. It is explained in the low level design [here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#low-level-design).
 
 ## Join query pushdown in presto Jdbc datasource
 
-Presto validate Join operation (PlanNode) spec to perform join pushdown. The specifics for the supported pushdown of table joins varies for each data source, and therefore for each connector. However, there are some generic conditions that must be met in order for a join to be pushed down in jdbc connector
+Presto validate Join operation (PlanNode) specifications to perform join pushdown. The specifics for the supported pushdown of table joins varies for each data source, and therefore for each connector. However, there are some generic conditions that must be met in order for a join to be pushed down in jdbc connector
 
-1) Join operation should be able to process by the Jdbc connector.
+1) Join operation should be able to processed by the Jdbc connector.
 
-Presto Jdbc connector could process almost every Join operation except presto   functions and operators. 
+Presto Jdbc connector will process almost every Join operation except presto functions and operators. 
 
-When we use some aggregate, math operation or datatype conversion along with join query it is converted to presto functions and apply to Join operation. For any join query which create intermediate presto function cannot  handle by the connector and hence not pushing down.
-
+When we use some aggregate, math operations or datatype conversion along with join query it is converted to presto functions and apply to Join operation. Any join query which creates intermediate presto function, cannot be handled by the connector and hence will not be pushed down.
 
 
 | No | Condition which create presto function                   | SQL Query                                                         |
