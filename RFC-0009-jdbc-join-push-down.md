@@ -179,11 +179,7 @@ When we use some aggregate, math operations or datatype conversion along with jo
 
 | No | Condition which create presto function                   | SQL Query                                    |
 |----|-------------------------------------|-------------------------------------------------------------------|
-| 1  | abs(int_clumn) = int_cilumn2        | `SELECT b.book_id, b.copies_available, b.year_published,          |
-|    |                                     |  l.total_seating_capacity, l.number_of_staff                      | 
-|    |                                     |  FROM posgres_tp.pg.books b                                       |
-|    |                                     |  JOIN posgres_tp.pg.libraries l                                   |
-|    |                                     |  ON ABS(b.library_id) = l.library_id;`                            |
+| 1  | abs(int_clumn) = int_cilumn2        | `Select * from table a join table b on abs(a.col1) = b.col2`                            
 | 2  | int_sum_column = int_value1_column1+int_value1_column2       | `<Add query>` 
 | 3  | cast(varchar_20_column, varchar(100) )= varchar100_column       | `<Add query>` 
 
