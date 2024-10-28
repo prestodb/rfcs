@@ -16,11 +16,11 @@ https://github.com/prestodb/presto/issues/23152
 
 ## Summary
 
-At present, when a query joins multiple tables, it creates a separate TableScanNode for each table. Each TableScanNode select all the records from that table. The join operation is then executed in-memory in Presto using a JOIN node by applying JoinCriteria, FilterPredicate and other criteria (like sort, limit, etc.).
+At present, when a query joins multiple tables, it creates a separate TableScanNode for each table. Each TableScanNode select all the records from that table. The join operation is then executed in-memory in Presto using a JOIN node by applying JoinCriteria, FilterPredicate and other criteria (like order by, limit, etc.).
 
-However, if the query joins tables from the same JDBC datasource, it would be more efficient to let the datasource handle the join instead of creating a separate TableScanNode for each table and joining them in Presto. If we "Push down" or send these joins to remote JDBC datasource it increases the performance 3x to 10x.
+However, if the query joins tables from the same JDBC datasource, it would be more efficient to let the datasource handle the join instead of creating a separate TableScanNode for each table and joining them in Presto. If we "Push down" or send these joins to remote JDBC datasource it increases the query performance. i.e., decreases the query execution time. We have seen improvements from 3x to 10x.
 
-For example, for the below postgres join query if we push down the join to a single TableScanNode, then the Presto Plan and performance will be as follows.
+For example, for the below postgres join query if we push down the join to a single TableScanNode, then the Presto Plan and performance will be as follows :
 
 **Join Query**
 
