@@ -111,13 +111,13 @@ select  *
 
 from postgresql.pg.mypg_table1 t1
 
-join postgresql.pg.mypg_table2 t2 on t1.pgfirsttablecolumn=t2.pgsecondtablecolumn
+join postgresql.pg.mypg_table2 t2 on t1.pgfirsttablecolumn = t2.pgsecondtablecolumn
 
-Join db2.db2.mydb2_table1 t3 on t3.DBTHRIDTABLECOLUMN=t2.pgsecondtablecolumn
+Join db2.db2.mydb2_table1 t3 on t3.dbthirdtablecolumn = t2.pgsecondtablecolumn
 
-JOIN db2.db2.mydb2_table2 t4 ON t3.DBTHRIDTABLECOLUMN=t4.dbfourthtablecolumn
+JOIN db2.db2.mydb2_table2 t4 ON t3.dbthirdtablecolumn = t4.dbfourthtablecolumn
 
-JOIN db2.db2.mydb2_table3 t5 ON t4.dbfourthtablecolumn=t5.dbfifthtablecolumn
+JOIN db2.db2.mydb2_table3 t5 ON t4.dbfourthtablecolumn = t5.dbfifthtablecolumn
 ``` 
 
 **Here we have five tables,** 
@@ -139,22 +139,19 @@ At present, presto creates five select statement (TableScanNodes) for this query
 
 
 
-In our proposed implementation, we restrict select statement (TableScanNode) creation based on tables and trying to create select statement (TableScanNode) against each connector by grouping the tables based on the connector
+In our proposed implementation, we restrict select statement (TableScanNode) creation based on tables and instead create select statement (TableScanNode) against each connector by grouping the tables based on the connector
 
 | No | Node Description                                  | SQL Query                                                                                                  |
 |----|---------------------------------------------------|------------------------------------------------------------------------------------------------------------|
-| 1  | TableScanNode [mypg_table1, mypg_table2] for PostgreSQL | `select t * from postgresql.pg.mypg_table1 t1, postgresql.pg.mypg_table2 t2 where t1.pgfirsttablecolumn=t2.pgsecondtablecolumn` |
-| 2  | TableScanNode [mypg_table1, mypg_table2, mypg_table3] for DB2 | `select t * from db2.db2.mydb2_table1 t3, db2.db2.mydb2_table2 t4, db2.db2.mydb2_table5 t5 where t3.DBTHRIDTABLECOLUMN=t4.dbfourthtablecolumn and t4.dbfourthtablecolumn=t5.dbfifthtablecolumn` |
+| 1  | TableScanNode [mypg_table1, mypg_table2] for PostgreSQL | `select * from postgresql.pg.mypg_table1 t1, postgresql.pg.mypg_table2 t2 where t1.pgfirsttablecolumn=t2.pgsecondtablecolumn` |
+| 2  | TableScanNode [mydb2_table1, mydb2_table2, mydb2_table3] for DB2 | `select * from db2.db2.mydb2_table1 t3, db2.db2.mydb2_table2 t4, db2.db2.mydb2_table5 t5 where t3.dbthirdtablecolumn = t4.dbfourthtablecolumn and t4.dbfourthtablecolumn = t5.dbfifthtablecolumn` |
 
 
+For performing this jdbc join pushdown,  we need to create two logical optimisers GroupInnerJoinsByConnector and JdbcJoinPushdown. 
 
-For performing this jdbc join pushdown,  we need to create two logical optimiser  GroupInnerJoinsByConnector and JdbcJoinPushdown. 
+GroupInnerJoinsByConnector optimizer is a PlanOptimizer which is responsible for flattening the JoinNode and adding the sunder nodes to a data structure called MultiJoinNode. 
 
-
-
-GroupInnerJoinsByConnector optimizer is a PlanOptimizer which is responsible for flattering the JoinNode and adding the sunder nodes to a data structure called MultiJoinNode. 
-
-GroupInnerJoinsByConnector optimizer will work on MultiJoinNode and will group TableScanNode based on connector name if the connector support join pushdown. This optimizer will create a single TableScanNode by using a new data structure called ConnectorTableHandleSet from the grouped TableScanNode. ConnectorTableHandleSet is a set of ConnectorTableHandle which is generated from grouped TableScanNode. This optimizer also create a combined overall predicate and overall assignments for the ConnectorTableHandleSet and will added to the newly created TableScanNode structure. This newly created TableScanNode structure will replace with the source list of MultiJoinNode.
+GroupInnerJoinsByConnector optimizer will work on MultiJoinNode and will group TableScanNodes based on connector name if the connector supports join pushdown. This optimizer will create a single TableScanNode by using a new data structure called ConnectorTableHandleSet from the grouped TableScanNode. ConnectorTableHandleSet is a set of ConnectorTableHandle which is generated from grouped TableScanNode. This optimizer also create a combined overall predicate and overall assignments for the ConnectorTableHandleSet and will added to the newly created TableScanNode structure. This newly created TableScanNode structure will replace with the source list of MultiJoinNode.
 GroupInnerJoinsByConnector optimizer then work for re-creating join node with updated MultiJoinNode structure. The low level design is available in the session <GroupInnerJoinsByConnector optimizer>
 
 ![After GroupInnerJoinsByConnector Optimizer](RFC-0009-jdbc-join-push-down/after_Group_opt.png)  
