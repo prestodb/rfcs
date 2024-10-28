@@ -179,14 +179,14 @@ When we use some aggregate, math operations or datatype conversion along with jo
 
 | No | Condition which create presto function                   | SQL Query                                    |
 |----|-------------------------------------|-------------------------------------------------------------------|
-| 1  | abs(int_clumn) = int_cilumn2        | `Select * from table a join table b on abs(a.col1) = b.col2`                            
-| 2  | int_sum_column = int_value1_column1+int_value1_column2       | `<Add query>` 
-| 3  | cast(varchar_20_column, varchar(100) )= varchar100_column       | `<Add query>` 
+| 1  | abs(int_clumn) = int_cilumn2        | `Select * from table a join table b on abs(a.col1) = b.col2;`                            
+| 2  | int_sum_column = int_value1_column1 + int_value1_column2       | `Select * from table a join table b on a.col1 = b.col2 + b.col3;` 
+| 3  | cast(varchar_20_column, varchar(100)) = varchar100_column       | `Select * from table a join table b on cast(a.varchar_20_column, varchar(100)) = b.varchar100_column;` 
 
 
 2) Join operation should be an inner join and should have at least one column to join with another table.
 
-Note: Presto inferencing sometime remove Join operation pushdown capability specifics (Eg: Inferencing to remove join condition) and sometime provide Join operation pushdown specifics capability (Eg: Inferencing to create inner join from Right/left join)
+Note: Other optimizers in Presto may change the Join operation. We can call this as Inference. Sometimes presto will remove Join operation (Eg: Infering to remove join condition). This will lead to pushdown capability being removed. And sometimes presto will change Join operation to a pushdown capable one. (Eg: Infering to create Inner join from Right/Left join)
 
 3) Join criteria (joining column) should create using Datatype and operators that support join pushdown. 
 
