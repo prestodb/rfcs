@@ -98,11 +98,11 @@ Basically the PlanNode or the Plan is a tree datastructure which represents the 
 
  ![PlanNode](RFC-0009-jdbc-join-push-down/Existing_prestoPlan.png) 
 
-Currently while executing a JoinNode, presto create separate TableScanNode for each table that participated on join query and this TableScanNode info is used by the connector to create the select query. On top of this select query result, presto apply join condition and other predicate to provide the final result.
+Currently while executing a JoinNode, presto creates separate TableScanNodes for each table that is participating in the join query. This TableScanNode info is used by the connector to create the select query for that table. On top of this select query result, presto apply join condition and other predicates to provide the final result.
 
 ![Joinpushdown presto plan performance](RFC-0009-jdbc-join-push-down/cur_join_wrks.png) 
 
-In the proposed implementation, all tables from the join query are trying to group based on the Jdbc connector (data source) name. And create a single TableScanNode for each jdbc connector by using the grouped table info, whenever it is possible. It ensures a single TableScanNode against a connector rather than each table of a join query. 
+In the proposed implementation, all tables from the join query are grouped based on the Jdbc connector (data source). A single TableScanNode is created for each jdbc connector by using the grouped table info, wherever it is possible. It ensures a single TableScanNode against a connector rather than against each table of a join query. 
 
 **For example consider below join query**
 
