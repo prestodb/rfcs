@@ -86,11 +86,11 @@ FROM postgresql.public.orders o
 
 ## Background
 
-This implementation is to address a performance limitation of Presto federation of SQLs of JDBC connectors to remote data sources such as DB2, Postgres, Oracle etc. Currently, Presto support predicate pushdown (WHERE condition pushdown) to some extent in JDBC connectors, but it does not have any join pushdown capabilities. This causes high performance impact on join queries and it is raised by some of our clients. While comparing with competitors we are also missing the Jdbc join pushdown capabilities.
+This implementation is to address a performance limitation of Presto federation of SQLs of JDBC connectors to remote data sources such as DB2, Postgres, Oracle etc. Currently, Presto support predicate pushdown (WHERE condition pushdown) to some extent in JDBC connectors, but it does not have any join pushdown capabilities. This causes high performance impact on join queries and it is raised by some of our clients.
 
 ## Proposed Implementation
 
-At present, if presto get a join query (from the CLI or UI) which is trying to join tables either from same datasource or from different datasource, it is receiving as a string formatted sql query. Presto validate the syntax and convert it to Query (Statement) object using presto parser and analyzer. This Query object is converted to presto internal reference architecture called Plan, using its logical and physical optimizers. Finally, this plan is executed by the executor.
+At present, if presto get a join query (from the CLI or UI) which is trying to join tables either from same datasource or from different datasource, it is received as a string formatted sql query. Presto validates the syntax and converts it to Query (Statement) object using presto parser and analyzer. This Query object is converted to presto internal reference architecture called Plan, using its logical and physical optimizers. Finally, this plan is executed by the executor.
 
 ![Joinpushdown presto plan performance](RFC-0009-jdbc-join-push-down/basic_wrk.png)  
 
