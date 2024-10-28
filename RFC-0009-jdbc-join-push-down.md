@@ -186,9 +186,17 @@ When we use some aggregate, math operations or datatype conversion along with jo
 
 2) Join operation should be an inner join and should have at least one column to join with another table.
 
-Note: Other optimizers in Presto may change the Join operation. We can call this as Inference. Sometimes presto will remove Join operation (Eg: Infering to remove join condition). This will lead to pushdown capability being removed. And sometimes presto will change Join operation to a pushdown capable one. (Eg: Infering to create Inner join from Right/Left join)
+Note: Other optimizers in Presto may change the Join operation. We can call this as Inference. Sometimes presto will change a Pushdown capable Inner join to another Join operation incapable of pushdown (Eg: Infering to remove join condition/predicate in the plan). This will lead to pushdown capability being removed. And sometimes presto will change Join operation to a pushdown capable one. (Eg: Infering to create Inner join from Right/Left join)
 
-3) Join criteria (joining column) should create using Datatype and operators that support join pushdown. 
+Examples to explain presto change an inner join to another Join operation : 
+Suppose we have a query like this: 
+`Select * from table a join table b on a.col1 = b.col2 and a.col1 = 5;`
+Presto will change this from an inner join to two different select statements like this: 
+`Select * from table a where a.col1 = 5;`
+`Select * from table b where b.col2 = 5;`
+Then does a cross join with these two results. We will not do pushdown in this case.
+
+3) Join criteria (joining column) should be of Datatypes and operators that support join pushdown. 
 
 | No | DataType support join pushdown                   | Operations                                           |
 |----|-------------------------------------|-------------------------------------------------------------------|
