@@ -170,11 +170,11 @@ After all optimization the PlanNode will pass to the presto-base-jdbc module to 
 
 Presto validate Join operation (PlanNode) specifications to perform join pushdown. The specifics for the supported pushdown of table joins varies for each data source, and therefore for each connector. However, there are some generic conditions that must be met in order for a join to be pushed down in jdbc connector
 
-1) Join operation should be able to processed by the Jdbc connector.
+1) The Jdbc connector should be able to process the Join operation.
 
 Presto Jdbc connector will process almost every Join operation except presto functions and operators. 
 
-When we use some aggregate, math operations or datatype conversion along with join query it is converted to presto functions and apply to Join operation. Any join query which creates intermediate presto function, cannot be handled by the connector and hence will not be pushed down.
+When we use some aggregate, math operations or datatype conversion along with join query it is converted to presto functions and applied to Join operation. Any join query which creates intermediate presto functions, cannot be handled by the connector and hence will not be pushed down.
 
 
 | No | Condition which create presto function                   | SQL Query                                                         |
