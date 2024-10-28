@@ -205,13 +205,9 @@ Then does a cross join with these two results. We will not do pushdown in this c
 | 3  | <datatype3>       | `=, <, >, <=, >=, !=, <>` 
 
 
-4) All tables from same connector will group based on above specifications and pushed down to underlying datasource. 
+4) All tables from same connector will be grouped based on above specifications and pushed down to underlying datasource. 
 
-5) Enable presto Join pushdown capabilities by setting the global flag enable-join-query-pushdown=true in custom-config.properties
-
-Note: This flag is a tech preview specific and default value is enable-join-query-pushdown=false. For enable Join pushdown capabilities we need to update enable-join-query-pushdown=true through backend and then do a presto server restart. After enabling the flag, you are able to pushdown equi-join and non equi-join queries. 
-
-In future release we will remove this global flag and bring as session properties to enable pushdown. If you enable that session properties it will pushdown equi-join queries. To enable non equi-join pushdown you need to enable another session flag  and will confirm on later stage.
+5) Enable presto Join pushdown capabilities by setting the session flag enable-join-query-pushdown = true.
 
 ## Low level Design
 
