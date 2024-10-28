@@ -147,12 +147,12 @@ In our proposed implementation, we restrict select statement (TableScanNode) cre
 | 2  | TableScanNode [mydb2_table1, mydb2_table2, mydb2_table3] for DB2 | `select * from db2.db2.mydb2_table1 t3, db2.db2.mydb2_table2 t4, db2.db2.mydb2_table5 t5 where t3.dbthirdtablecolumn = t4.dbfourthtablecolumn and t4.dbfourthtablecolumn = t5.dbfifthtablecolumn` |
 
 
-For performing this jdbc join pushdown,  we need to create two logical optimisers GroupInnerJoinsByConnector and JdbcJoinPushdown. 
+For performing this jdbc join pushdown,  we need to create two logical optimizers GroupInnerJoinsByConnector and JdbcJoinPushdown. 
 
-GroupInnerJoinsByConnector optimizer is a PlanOptimizer which is responsible for flattening the JoinNode and adding the sunder nodes to a data structure called MultiJoinNode. 
+GroupInnerJoinsByConnector optimizer is a PlanOptimizer which is responsible for flattening the JoinNode and adding the sundered nodes to a data structure called MultiJoinNode. 
 
-GroupInnerJoinsByConnector optimizer will work on MultiJoinNode and will group TableScanNodes based on connector name if the connector supports join pushdown. This optimizer will create a single TableScanNode by using a new data structure called ConnectorTableHandleSet from the grouped TableScanNode. ConnectorTableHandleSet is a set of ConnectorTableHandle which is generated from grouped TableScanNode. This optimizer also create a combined overall predicate and overall assignments for the ConnectorTableHandleSet and will added to the newly created TableScanNode structure. This newly created TableScanNode structure will replace with the source list of MultiJoinNode.
-GroupInnerJoinsByConnector optimizer then work for re-creating join node with updated MultiJoinNode structure. The low level design is available in the session <GroupInnerJoinsByConnector optimizer>
+GroupInnerJoinsByConnector optimizer will work on MultiJoinNode and will group TableScanNodes based on connector name if the connector supports join pushdown. This optimizer will create a single TableScanNode by using a new data structure called ConnectorTableHandleSet from the grouped TableScanNode. ConnectorTableHandleSet is a set of ConnectorTableHandles which is generated from grouped TableScanNode. This optimizer also creates a combined overall predicate and overall assignments for the ConnectorTableHandleSet and will add these to the newly created TableScanNode. This newly created TableScanNode structure will replace the source list of MultiJoinNode.
+GroupInnerJoinsByConnector optimizer will then work on re-creating join node with updated MultiJoinNode structure. The low level design is available in the session <GroupInnerJoinsByConnector optimizer>
 
 ![After GroupInnerJoinsByConnector Optimizer](RFC-0009-jdbc-join-push-down/after_Group_opt.png)  
 
