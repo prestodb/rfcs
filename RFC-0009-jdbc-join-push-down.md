@@ -107,7 +107,7 @@ In the proposed implementation, all tables from the join query are grouped based
 **For example consider below join query**
 
 ``` 
-select t  *
+select  *
 
 from postgresql.pg.mypg_table1 t1
 
@@ -122,20 +122,20 @@ JOIN db2.db2.mydb2_table3 t5 ON t4.dbfourthtablecolumn=t5.dbfifthtablecolumn
 
 **Here we have five tables,** 
 
-mypg_table1 and  mypg_table12 from postgresql connector (data source)
+mypg_table1 and  mypg_table2 from postgresql connector
 
 mydb2_table1, mydb2_table2 and mydb2_table3 from db2 connector
 
 
-At present, presto create five select statement (TableScanNode) for this query as follows
+At present, presto creates five select statement (TableScanNodes) for this query as follows
 
-| No | Node Description                   | SQL Query                                                         |
-|----|-------------------------------------|-------------------------------------------------------------------|
-| 1  | TableScanNode for mypg_table1       | `select t * from postgresql.pg.mypg_table1 t1`                    |
-| 2  | TableScanNode for mypg_table2       | `select t * from postgresql.pg.mypg_table2 t2`                    |
-| 3  | TableScanNode for mypg_table1       | `select t * from db2.db2.mydb2_table1 t3`                         |
-| 4  | TableScanNode for mypg_table1       | `select t * from db2.db2.mydb2_table2 t4`                         |
-| 5  | TableScanNode for mypg_table1       | `select t * from db2.db2.mydb2_table3 t5`                         |
+| No | Node Description                     | SQL Query                                                         |
+|----|--------------------------------------|-------------------------------------------------------------------|
+| 1  | TableScanNode for mypg_table1        | `select t * from postgresql.pg.mypg_table1 t1`                    |
+| 2  | TableScanNode for mypg_table2        | `select t * from postgresql.pg.mypg_table2 t2`                    |
+| 3  | TableScanNode for mydb2_table1       | `select t * from db2.db2.mydb2_table1 t3`                         |
+| 4  | TableScanNode for mydb2_table2       | `select t * from db2.db2.mydb2_table2 t4`                         |
+| 5  | TableScanNode for mydb2_table3       | `select t * from db2.db2.mydb2_table3 t5`                         |
 
 
 
