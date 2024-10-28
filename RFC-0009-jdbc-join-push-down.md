@@ -86,10 +86,7 @@ FROM postgresql.public.orders o
 
 ## Background
 
-This implementation is to address a performance limitation of Presto federation of SQLs of JDBC connector to remote data sources such as DB2, Postgres, Oracle etc. Currently, Presto support predicate pushdown (WHERE condition pushdown) to some extent in JDBC connectors, but it does not have any join pushdown capabilities. This cause high performance impact on join queries and it is raised by some of our client. While comparing with competitors we also missing the Jdbc join pushdown capabilities.
-
-We did a POC by changing the presto generated PlanNode to handle jdbc join push down and it increases the performance from 5x on postgres and  8x on db2 remote datasource. Now we need to perform its actual implementation 
-
+This implementation is to address a performance limitation of Presto federation of SQLs of JDBC connectors to remote data sources such as DB2, Postgres, Oracle etc. Currently, Presto support predicate pushdown (WHERE condition pushdown) to some extent in JDBC connectors, but it does not have any join pushdown capabilities. This causes high performance impact on join queries and it is raised by some of our clients. While comparing with competitors we are also missing the Jdbc join pushdown capabilities.
 
 ## Proposed Implementation
 
