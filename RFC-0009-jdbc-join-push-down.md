@@ -249,9 +249,7 @@ Build overall filter for the newly created join node
 
 2. Load GroupInnerJoinsByConnector optimizer based on session flag
 
-JdbcJoinRenderByConnector optimizer need to load based on global flag ‘enable-join-query-pushdown’. This flag should be configure in presto-main custom-config.properties with default value as false. This flag is able to set by the user using existing customisation API or through the backend. Once the flag update a presto restart is expected to reflect the properties.
-
-The necessary code change to add this flag in ConfigConstant.java and load its value from custom-config.properties using existing ConfigUtil method should do as part of this.
+JdbcJoinRenderByConnector optimizer need to load based on session flag ‘enable-join-query-pushdown’. This flag should be configure in presto-main config.properties with default value as false.
 
 If the flag is set (‘enable-join-query-pushdown=true’), then while starting presto JdbcJoinRenderByConnector optimizer should add to PlanOptimizers list. If it is not set  (‘enable-join-query-pushdown=false’) the JdbcJoinRenderByConnector optimizer itself will not load to the application to perform JoinPushdown operation.
 
@@ -547,18 +545,17 @@ if (ConfigUtil.getConfig(ENABLE_JDBC_JOIN_QUERY_PUSHDOWN)) {
     
 }
 ```
-10. Enable JdbcJoinPushdown at connector level 
-This is a future requirement and not required on November 2024 release.
+10. Enable JdbcJoinPushdown at connector level and session level 
 
-There should have a mechanism to enable connector (catalog) level JoinPushdown capabilities. We need to bring a new flag on catalog.properties file (Eg: postgresql.properties) say enable_federated_join_pushdwon.
+There should have a mechanism to enable connector (catalog) level JoinPushdown capabilities. We need to bring a new flag on catalog.properties file (Eg: postgresql.properties) say enable_federated_join_pushdown.
 
-If we not set this flag (‘enable_federated_join_pushdwon=false’) then no  JoinPushdown should happened for this catalog even though  the global join pushdown flag is enabled (refer point 2 for the details of global join push down flag).
+If we do not set this flag (‘enable_federated_join_pushdown=false’) then no JoinPushdown should happened for this catalog even though the session join pushdown flag is enabled (refer point 2 for the details of session join push down flag).
 
-If we set this flag (‘enable_federated_join_pushdwon=true’) then   JoinPushdown should happened for this catalog only if  the global join pushdown flag is enabled (refer point 2 for the details of global join push down flag).
-
+If we set this flag (‘enable_federated_join_pushdwon=true’) then JoinPushdown should happened for this catalog only if the session join pushdown flag is enabled (refer point 2 for the details of session join push down flag).
 
 11. Pushdown the overall filter to the newly created TableScanNode.
 After creating Single TableScanNode for grouped tables (refer point 7) we need to pushdown the FilterNode on connector level for the applicable filter and maintain the FilterNode for presto if it is not able to pushdown.For this there is no code change is expecting and it should work as part of point 9 activities. This need to confirm and validate at functional verification testing.
+
 12. Create JoinQuery based on JdbcConnector
 At present we are focusing on common operators =, <, >, <=, >= and !=  with common datatype like int, bigint, float, real, string, varchar, char. So there is no connector level implementation required and focusing on single implementation for all supported Jdbc connector through QueryBuilder class.
 
