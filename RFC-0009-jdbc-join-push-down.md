@@ -235,7 +235,7 @@ For Join pushingdown we need to travers through the JoinNode. We are able to cre
 
  Below is the overall process that we have in GroupInnerJoinsByConnector optimizer
 
-[Predicatepushdown optimizer](RFC-0009-jdbc-join-push-down/in-depth-design-image-1.png)
+[Image 1](RFC-0009-jdbc-join-push-down/in-depth-design-image-1.png)
 
 After completing JdbcJoinRenderByConnector optimization we need to invoke predicate pushdown optimizer to recreate join criteria from the filter node of the JoinNode. The detailed implantation of JdbcJoinRenderByConnector optimizer is explained in below sessions. 
 
@@ -489,15 +489,25 @@ Now we could remove all the tables from the group which have no join criteria an
 
 7. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
 
-8. Recreate left deep join node from the MultiJoinNode source list
+Create a TableScanNode structure which is able to hold all the jdbc table  which  is grouped as part of above implementation.  Below is the proposed structure for the new TableScanNode
 
-9. Build overall filter for the newly created join node
+[Image 2](RFC-0009-jdbc-join-push-down/in-depth-design-image-2.png)
 
-10. Enable JdbcJoinPushdown at connector level 
+[Image 3](RFC-0009-jdbc-join-push-down/in-depth-design-image-3.png)
 
-11. Pushdown the overall filter to the newly created TableScanNode.
+Here we are able to iterate through grouped list against a connector and able to create JoinTables for each TableScanNode. Using this list of JoinTables we are creating a single TableScanNode for that connector. This Single table scan node is added to the rewrittenSources list to create MultiJoinNode source. 
 
-12. Create JoinQuery based on JdbcConnector
+
+
+9. Recreate left deep join node from the MultiJoinNode source list
+
+10. Build overall filter for the newly created join node
+
+11. Enable JdbcJoinPushdown at connector level 
+
+12. Pushdown the overall filter to the newly created TableScanNode.
+
+13. Create JoinQuery based on JdbcConnector
 
 
 ## [Optional] Metrics
