@@ -231,11 +231,159 @@ For performing Jdbc JoinPushdown we required below implementations :
 
 1. Create new PlanOptimizer called GroupInnerJoinsByConnector for JdbcJoinPushdown
 
+For Join pushingdown we need to travers through the JoinNode. We are able to create a new optimizer (GroupInnerJoinsByConnector) which implement PlanOptimizer or could create a new Rule (JdbcJoinPushdown) for existing IterativeOptimizer for traversing the Node. Here the design is based on the new optimizer GroupInnerJoinsByConnector. For both cases the flow and design are same.
+
+ Below is the overall process that we have in GroupInnerJoinsByConnector optimizer
+
+[Predicatepushdown optimizer](RFC-0009-jdbc-join-push-down/in-depth-design-image-1.png)
+
+After completing JdbcJoinRenderByConnector optimization we need to invoke predicate pushdown optimizer to recreate join criteria from the filter node of the JoinNode. The detailed implantation of JdbcJoinRenderByConnector optimizer is explained in below sessions. 
+
+Create a plan rewriter for JdbcJoinRenderByConnector by implementing SimplePlanRewriter
+Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called   MultiJoinNode
+Use MultiJoinNode to group Jdbc Tables based on connector name 
+Build join relation for the grouped tables from all the join predicates
+Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
+Recreate left deep join node from the MultiJoinNode source list
+Build overall filter for the newly created join node
+
 2. Load GroupInnerJoinsByConnector optimizer based on session flag
+
+JdbcJoinRenderByConnector optimizer need to load based on global flag ‘enable-join-query-pushdown’. This flag should be configure in presto-main custom-config.properties with default value as false. This flag is able to set by the user using existing customisation API or through the backend. Once the flag update a presto restart is expected to reflect the properties.
+
+The necessary code change to add this flag in ConfigConstant.java and load its value from custom-config.properties using existing ConfigUtil method should do as part of this.
+
+If the flag is set (‘enable-join-query-pushdown=true’), then while starting presto JdbcJoinRenderByConnector optimizer should add to PlanOptimizers list. If it is not set  (‘enable-join-query-pushdown=false’) the JdbcJoinRenderByConnector optimizer itself will not load to the application to perform JoinPushdown operation.
 
 3. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
 
+In JdbcJoinRenderByConnector optimize method we need to invoke Rewriter to rewrite the plannode if it contains JoinNode. JoinNode rewrite is possible by overriding the visitJoin() method of SimplePlanRewriter.
+
+In visitJoin() we should have method to validate JdbcJoinPushdwonConditions that explained in the document. If the JoinNode satisfies the  JdbcJoinPushdwonConditions we should pushdown the Join by creating a single table scan node for that Join. 
+
+JoinPushdown should happen for InnerJoin. No other Join like LEFT JOIN, RIGHT JOIN, OUTER JOIN, CROSS JOIN, etc should not pushdown.
+
+Basic structure of JdbcJoinRenderByConnector optimizer is as follows
+
+
+``` 
+public class JdbcJoinRenderByConnector
+        implements PlanOptimizer
+{
+
+    public JdbcJoinRenderByConnector(Metadata metadata)
+    {
+        -----
+    }
+
+    @Override
+    public PlanOptimizerResult optimize(PlanNode plan, Session session, TypeProvider types, VariableAllocator variableAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
+    {
+
+    }
+    private static class Rewriter
+            extends SimplePlanRewriter<Void>
+    {
+        private final FunctionResolution functionResolution;
+        private final DeterminismEvaluator determinismEvaluator;
+        PlanNodeIdAllocator idAllocator;
+        private final Logger logger;
+        private final Metadata metadata;
+
+        private Rewriter(FunctionResolution functionResolution, DeterminismEvaluator determinismEvaluator, PlanNodeIdAllocator idAllocator, Logger logger, Metadata metadata)
+        {
+            this.functionResolution = functionResolution;
+            this.determinismEvaluator = determinismEvaluator;
+            this.idAllocator = idAllocator;
+            this.logger = logger;
+            this.metadata = metadata;
+        }
+        @Override
+        public PlanNode visitJoin(JoinNode node, RewriteContext<Void> context)
+        {
+            PlanNode source = getCombinedJoin(node, functionResolution, determinismEvaluator, metadata);
+            return source;
+        }
+    }
+    
+}
+```
 4. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
+
+If a JonNode satisfies all JdbcJoinPushdown requirement, then the very first step is to break the left deep tree structure of JoinNode and create a flatten structure called MultiJoinNode.
+
+On visitJoin(), the core logic is starting by flattering the JoinNode tables into a list. We also required to flatter all the predicate including Join predicate and filter predicate into a single filter list. We separate all the output variables and assignments against the connector and keep for further processing. This flatten result will keep in a data structure called MultiJoinNode.
+
+```
+class MultiJoinNode
+{
+    private final CanonicalJoinNode node;
+    private final Assignments assignments;
+    private final boolean isConnectorJoin;
+}
+```
+
+```
+public class CanonicalJoinNode
+        extends PlanNode
+{
+    private final List<PlanNode> sources;
+    private final JoinType type;
+    private final Set<EquiJoinClause> criteria;
+    private final Set<RowExpression> filters;
+    private final List<VariableReferenceExpression> outputVariables;
+}
+```
+
+Sample logic for flatten JoinNode is as follows.
+
+```
+private void flattenNode(PlanNode resolved)
+{
+    if (resolved instanceof FilterNode) {
+        // We pull up all Filters to the top of the join graph, these will be pushed down again by predicate pushdown
+        // We do this in hope of surfacing any TableScan nodes that can be combined
+        FilterNode filterNode = (FilterNode) resolved;
+        filters.add(filterNode.getPredicate());
+        flattenNode(filterNode.getSource());
+        return;
+    }
+
+    if (!(resolved instanceof JoinNode)) {
+        //TODO optimize
+        if (resolved instanceof ProjectNode) {
+            // Certain ProjectNodes can be 'inlined' into the parent Jdbc TableScan, e.g a CAST expression
+            // We will do this here while flattening the JoinNode if possible
+
+            // For now, we log the fact that we saw a ProjectNode and if identity projection, will continue
+            logger.info("Found ProjectNode [%s] above TableScan/Filter node %s", resolved, resolved.getSources());
+
+            //Only identity projections can be handled.
+            if (AssignmentUtils.isIdentity(((ProjectNode) resolved).getAssignments())) {
+                flattenNode(((ProjectNode) resolved).getSource());
+                return;
+            }
+        }
+        sources.add(resolved);
+        return;
+    }
+
+    JoinNode joinNode = (JoinNode) resolved;
+    if (joinNode.getType() != INNER || !determinismEvaluator.isDeterministic(joinNode.getFilter().orElse(TRUE_CONSTANT))) {
+        sources.add(resolved);
+        return;
+    }
+
+    flattenNode(joinNode.getLeft());
+    flattenNode(joinNode.getRight());
+    joinNode.getCriteria().stream()
+            .map(criteria -> toRowExpression(criteria, functionResolution))
+            .forEach(joinCriteriaFilters::add);
+    joinNode.getFilter().ifPresent(joinCriteriaFilters::add);
+}
+``` 
+
+Here the sources contains all the tables (irrespective of connector) of that JoinNode, filters contains all the predicate of that JoinNode. Now we completed the flattening of JoinNode.
 
 5. Use MultiJoinNode to group Jdbc Tables based on connector name 
 
