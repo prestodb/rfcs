@@ -387,7 +387,105 @@ Here the sources contains all the tables (irrespective of connector) of that Joi
 
 5. Use MultiJoinNode to group Jdbc Tables based on connector name 
 
+At this point we have the MultiJoinNode data structure which hold all the tables, predicates, assignments and variables of the JoinNode hierarchy (presto PlanNode). 
+
+Now we need to group the tables based on connector name. For this we will iterate the source list of MultiJoinNode and get TableScanNodes. If the ConnectorTableHandle of TableScanNodes is JdbcTableHandle then we put that TableScanNode in a map with key as its catalog name.   So for the same catalog name we have a list of TableScanNode. If ConnectorTableHandle is not a JdbcTableHandle then we add that TableScanNode to rewrittenSources list without performing any grouping. 
+
+```
+Map<String, List<PlanNode>> sourcesByConnector = new HashMap<>();
+Set<PlanNode> rewrittenSources = new LinkedHashSet<>();
+
+
+for (PlanNode source : multiJoinNode.getSources()) {
+    Optional<String> connectorId = getJdbcConnectorId(source);
+    if (connectorId.isPresent()) {
+        // This source can be combined with other 'sources' of the same connector to produce a single TableScanNode
+        sourcesByConnector.computeIfAbsent(connectorId.get(), k -> new ArrayList<>());
+        sourcesByConnector.get(connectorId.get()).add(source);
+        // jdbcJoin = true;
+    }
+    else {
+        rewrittenSources.add(source);
+    }
+}
+```
+Using the rewrittenSources we will create a new MultiJoinNode and that will be used for final presto Join creation. That means in further steps we will create a single TableScanNode for each group and add that single TableScanNode to rewrittenSources from the sourcesByConnector map.
+
+For grouping Jdbc tables  we need two informations from ConnectorTableHandle. 
+
+First is identifying whether the ConnectorTableHandle instance is JdbcTableHandle or not and 
+
+The second is that if it is JdbcTableHandle get its catalog name. 
+
+For the first item, we could add new default method isJdbcConnector() with default return as false on ConnectorTableHandle Interface to check the JdbcTableHandle. This isJdbcConnector() will override in JdbcTableHandle to return true and we could ensure isJdbcConnector return positive value only for the JdbcConnectors.
+
+For the second item, we could add new default method getConnectorId() with default return as null string on ConnectorTableHandle Interface. Only the JdbcTableHandle will override getConnectorId() to return the catalog name.
+
+Thus we could create a group of tables against each catalog. Again every tables on the Jdbc catalog cannot pushed down and we should ensure there is at least one joining criteria against the grouped tables to avoid cross join at connector level. For example consider below query
+
+```
+Select *
+from pg.table1 pg1
+join pg.table2 pg2 on pg1.clmn1=pg2.clmn2
+join db2.table3 t3 on pg1.clmn1=t3.clmn
+join db2.table4 t4 on pg2.clmn1=t4.clmn
+```
+Now we group table1 and table2 based on catalog pg. The table3 and table4 group based on catalog db2. But here db2 catalog tables does not have a join criteria within the db2 catalog tables and all join criteria relay on another pg catalog. And so we should not pushdown db2 tables and need to revert back from the grouped list. For that we could build join relation for the grouped tables from the predicates and if there is no valid join relation that table could send back to source list by removing from grouping list
+
 6. Build join relation for the grouped tables from all the join predicates
+
+The MultiJoinNode already flattered the join criteria  and created the overall join predicate list called joinFilter. We are able to re-create the equality and inequality inference for joinFilter using existing presto EqualityInference methods.
+
+The approach is that we could recreate the overall join ‘on clause’ against the grouped table and check which all grouped tables are participated on that join clause. If there is any table which is not participated on any one of the join clause that we could remove from the grouped list and add to rewrittenSources. Once you identify the tables related to join ‘on clause’ then we should pass the join ‘on clause’  to connector level for executing it. So it should be understand by the connector. That means we should remove tables from the group list which ‘on clause’ cannot process by the underlying connector and will dd on rewrittenSources.
+
+Here we could summarize the activities as two
+
+Recreate join ‘on criteria’ aginst grouped table and remove tables which are not participated on ‘on criteria’
+
+Remove tables from groups if the tables ‘on criteria’ is not able to process by the connector.
+
+6.1 ) Recreate join criteria for grouped tables
+
+ We could generate filterEqualityInference and inequalityPredicates from the overall Join filters using existing presto methods.
+
+below is the sample code for that.
+
+```
+EqualityInference filterEqualityInference = new EqualityInference.Builder(metadata)
+        .addEqualityInference(multiJoinNode.getJoinFilter())
+        .build();
+Iterable<RowExpression> inequalityPredicates = filter(extractConjuncts(multiJoinNode.getJoinFilter()), isInequalityInferenceCandidate(metadata));
+```
+
+Then we need to recreate join predicate from the grouped table output as follows
+```
+List<RowExpression> equiJoinFilters = filterEqualityInference.generateEqualitiesPartitionedBy(combinedOutputVariables::contains)
+                    .getScopeEqualities();
+Set<RowExpression> inequalityPredicateSet = StreamSupport.stream(inequalityPredicates.spliterator(), false)
+        .collect(Collectors.toSet());
+List<RowExpression> scopedInequalities = getExpressionsWithinVariableScope(inequalityPredicateSet, combinedOutputVariables);
+```
+
+Now we have list of equiJoinFilters and inequalityPredicateSet. Then we need to remove tables which are not part of these predicate and the part of the predicate which cannot execute by  the connector
+
+6.2 Remove tables from groups if the tables ‘on criteria’ is not able to process by the connector.
+
+After creating list of equality and inequality filters we are able to translate this predicate to JdbcExpression using existing JdbcFilterToSqlTranslator. Sample code is available on JdbcComputePushdown optimizer visitFilter().Code snippet  from JdbcComputePushdown optimizer visitFilter() is as follows we could reuse the code in JdbcTableHandle to check whether there is any JdbcExpression is created or not. 
+
+```
+RowExpression predicate = expressionOptimizer.optimize(node.getPredicate(), OPTIMIZED, session);
+predicate = logicalRowExpressions.convertToConjunctiveNormalForm(predicate);
+
+JdbcTableHandle tableHandle = (JdbcTableHandle) oldTableScanNode.getTable().getConnectorHandle();
+RowExpressionTranslator translator = tableHandle.hasJoinTables() ? jdbcJoinPredicateToSqlTranslator : jdbcFilterToSqlTranslator;
+TranslatedExpression<JdbcExpression> jdbcExpression = translateWith(
+        predicate,
+        translator,
+        oldTableScanNode.getAssignments());
+Optional<JdbcExpression> translated = jdbcExpression.getTranslated();
+```
+
+Now we could remove all the tables from the group which have no join criteria and having join criteria which is not able to pushdwon. The removed tables will add in the rewrittenSources as explained on step5
 
 7. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
 
