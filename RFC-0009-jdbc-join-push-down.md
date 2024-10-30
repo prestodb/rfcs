@@ -206,9 +206,17 @@ Then it does a cross join with these two results. We will not do pushdown in thi
 
 | No | DataType support join pushdown                   | Operations                                           |
 |----|-------------------------------------|-------------------------------------------------------------------|
-| 1  | <datatype>        | `=, <, >, <=, >=, !=, <>`                    |
-| 2  | <datatype2>       | `=, <, >, <=, >=, !=, <>`  
-| 3  | <datatype3>       | `=, <, >, <=, >=, !=, <>` 
+| 1  | TinyINT        | `=, <, >, <=, >=, !=, <>`                    |
+| 2  | SmallINT       | `=, <, >, <=, >=, !=, <>`                    |   
+| 3  | Integer        | `=, <, >, <=, >=, !=, <>`                    |
+| 4  | BigINT         | `=, <, >, <=, >=, !=, <>`                    |
+| 5  | Boolean        | `=, !=, <>`                                  |   
+| 6  | Integer        | `=, <, >, <=, >=, !=, <>`                    |
+| 7  | Real           | `=, <, >, <=, >=, !=, <>`                    |   
+| 8  | Double         | `=, <, >, <=, >=, !=, <>`                    |
+| 9  | Decimal        | `=, <, >, <=, >=, !=, <>`                    |
+| 10 | Varchar        | `=, <, >, <=, >=, !=, <>`                    |
+| 11 | Char           | `=, <, >, <=, >=, !=, <>`                    |
 
 
 4) All tables from same connector will be grouped based on above specifications and pushed down to underlying datasource. 
