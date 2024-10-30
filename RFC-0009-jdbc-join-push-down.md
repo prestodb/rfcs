@@ -497,17 +497,99 @@ Create a TableScanNode structure which is able to hold all the jdbc table  which
 
 Here we are able to iterate through grouped list against a connector and able to create JoinTables for each TableScanNode. Using this list of JoinTables we are creating a single TableScanNode for that connector. This Single table scan node is added to the rewrittenSources list to create MultiJoinNode source. 
 
+8. Recreate left deep join node from the MultiJoinNode source list
+Now we have rewrittenSources list which contains new single TableScanNode (for grouped tables) and other normal TableScanNode which are not able to group. Using the rewrittenSources list recreate MultiJoinNode.Using MultiJoinNode we are able to recreate LeftDeepJoinTree by following ReorderJoins Rule. Sample code is as follows
+
+```
+private static PlanNode createJoin(int index, List<PlanNode> sources, PlanNodeIdAllocator idAllocator)
+{
+    if (index == sources.size() - 1) {
+        return sources.get(index);
+    }
+
+    PlanNode leftNode = createJoin(index + 1, sources, idAllocator);
+    PlanNode rightNode = sources.get(index);
+    return new JoinNode(
+            Optional.empty(),
+            idAllocator.getNextId(),
+            JoinType.INNER,
+            leftNode,
+            rightNode,
+            ImmutableList.of(),
+            ImmutableList.<VariableReferenceExpression>builder()
+                    .addAll(leftNode.getOutputVariables())
+                    .addAll(rightNode.getOutputVariables())
+                    .build(),
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            Optional.empty(),
+            ImmutableMap.of());
+}
+```
+9. Build overall filter for the newly created join node
+While we create MultiJoinNode we separated all the FilterNode by getting its predicate  and adding the predicate to a set called filters. Again we flatter the join criteria against each join node and create a row expression called joinFilter. This need to use to create an overall predicate list and using the overall predicate list we need to create a FilterNode on top of recreated left deep JoinNode. 
+
+```
+PlanNode joinNode //Recreate left deep join node from the MultiJoinNode source list
+
+RowExpression combinedFilters = and(multiJoinNode.getJoinFilter(), multiJoinNode.getFilter());
+return new FilterNode(Optional.empty(), idAllocator.getNextId(), joinNode, combinedFilters);
+```
+This FilterNode will pushdown to JoinNodes as its join criteria in later stage by the existing optimizers called PredicatePushdown Optimizer.
+
+Predicate Pushdown Optimizer will invoke after JdbcJoinRenderByConnector . Sample code is as follows
+```
+if (ConfigUtil.getConfig(ENABLE_JDBC_JOIN_QUERY_PUSHDOWN)) {
+    builder.add(new JdbcJoinRenderByConnector(metadata, sqlParser));    
+    predicatePushDown = new StatsRecordingPlanOptimizer(optimizerStats, new PredicatePushDown(metadata, sqlParser, true));
+    builder.add(predicatePushDown, simplifyRowExpressionOptimizer);
+    
+}
+```
+10. Enable JdbcJoinPushdown at connector level 
+This is a future requirement and not required on November 2024 release.
+
+There should have a mechanism to enable connector (catalog) level JoinPushdown capabilities. We need to bring a new flag on catalog.properties file (Eg: postgresql.properties) say enable_federated_join_pushdwon.
+
+If we not set this flag (‘enable_federated_join_pushdwon=false’) then no  JoinPushdown should happened for this catalog even though  the global join pushdown flag is enabled (refer point 2 for the details of global join push down flag).
+
+If we set this flag (‘enable_federated_join_pushdwon=true’) then   JoinPushdown should happened for this catalog only if  the global join pushdown flag is enabled (refer point 2 for the details of global join push down flag).
 
 
-9. Recreate left deep join node from the MultiJoinNode source list
+11. Pushdown the overall filter to the newly created TableScanNode.
+After creating Single TableScanNode for grouped tables (refer point 7) we need to pushdown the FilterNode on connector level for the applicable filter and maintain the FilterNode for presto if it is not able to pushdown.For this there is no code change is expecting and it should work as part of point 9 activities. This need to confirm and validate at functional verification testing.
+12. Create JoinQuery based on JdbcConnector
+At present we are focusing on common operators =, <, >, <=, >= and !=  with common datatype like int, bigint, float, real, string, varchar, char. So there is no connector level implementation required and focusing on single implementation for all supported Jdbc connector through QueryBuilder class.
 
-10. Build overall filter for the newly created join node
+Now we have new TableScanNod with list of joinTables. The split manager works on JdbcSplit and provide objects for processing on connector level. We need to modify the logic to transfer the new object (Optional<List<JoinTables>> joinTables) too, to the connector level. Currently, for the Join query, the split is transfer to buildSql() to create the select statement. If the split contains ‘joinTables’ details then we need to transfer this ‘joinTables’ details to the new method called ‘buildJoinSql()’ where we need to create and return join query instead of select query.
 
-11. Enable JdbcJoinPushdown at connector level 
+On buildJoinSql(), we need to handle select column, left tables, right join tables, join condition and filter condition.
 
-12. Pushdown the overall filter to the newly created TableScanNode.
+Handling From Table.
 
-13. Create JoinQuery based on JdbcConnector
+The parameter  ‘Optional<List<JoinTables>> joinTables’ that received on buildJoinSql() contains the tables in an order to join.  We could use this list of tables as from tables
+
+Handling Select Column
+
+The select column needs to resolve from the above input argument List<JdbcColumnHandle> columns
+
+Handling JoinType
+
+We need not consider the JoinType, but we need to write the join query in the form of where clause. 
+
+Handling Join criteria
+
+The Join criteria is also available additional predicate input
+
+Resolving Assignment
+
+The select column name and join criteria may be available as an expression and so each column (expression) we need to resolve from exact table assignement. Against each  JoinTables we have assignments object and we need to extract the actual table name and column name from this assignment for each select and criteria column.
+
+Handling Filter
+
+There is no change expected but we may need to handle the assignment and alias.
+
 
 
 ## [Optional] Metrics
