@@ -234,9 +234,9 @@ For Join pushingdown we need to travers through the JoinNode. We are able to cre
 
 ![Image 1](RFC-0009-jdbc-join-push-down/in-depth-design-image-1.png)
 
-After completing JdbcJoinRenderByConnector optimization we need to invoke predicate pushdown optimizer to recreate join criteria from the filter node of the JoinNode. The detailed implantation of JdbcJoinRenderByConnector optimizer is explained in below sessions. 
+After completing GroupInnerJoinsByConnector optimization we need to invoke predicate pushdown optimizer to recreate join criteria from the filter node of the JoinNode. The detailed implantation of GroupInnerJoinsByConnector optimizer is explained in below sessions. 
 
-Create a plan rewriter for JdbcJoinRenderByConnector by implementing SimplePlanRewriter
+Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
 Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called   MultiJoinNode
 Use MultiJoinNode to group Jdbc Tables based on connector name 
 Build join relation for the grouped tables from all the join predicates
@@ -246,27 +246,27 @@ Build overall filter for the newly created join node
 
 2. Load GroupInnerJoinsByConnector optimizer based on session flag
 
-JdbcJoinRenderByConnector optimizer need to load based on session flag ‘enable-join-query-pushdown’. This flag should be configure in presto-main config.properties with default value as false.
+GroupInnerJoinsByConnector optimizer need to load based on session flag ‘enable-join-query-pushdown’. This flag should be configure in presto-main config.properties with default value as false.
 
-If the flag is set (‘enable-join-query-pushdown=true’), then while starting presto JdbcJoinRenderByConnector optimizer should add to PlanOptimizers list. If it is not set  (‘enable-join-query-pushdown=false’) the JdbcJoinRenderByConnector optimizer itself will not load to the application to perform JoinPushdown operation.
+If the flag is set (‘enable-join-query-pushdown=true’), then while starting presto GroupInnerJoinsByConnector optimizer should add to PlanOptimizers list. If it is not set  (‘enable-join-query-pushdown=false’) the GroupInnerJoinsByConnector optimizer itself will not load to the application to perform JoinPushdown operation.
 
 3. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
 
-In JdbcJoinRenderByConnector optimize method we need to invoke Rewriter to rewrite the plannode if it contains JoinNode. JoinNode rewrite is possible by overriding the visitJoin() method of SimplePlanRewriter.
+In GroupInnerJoinsByConnector optimize method we need to invoke Rewriter to rewrite the plannode if it contains JoinNode. JoinNode rewrite is possible by overriding the visitJoin() method of SimplePlanRewriter.
 
-In visitJoin() we should have method to validate JdbcJoinPushdwonConditions that explained in the document. If the JoinNode satisfies the  JdbcJoinPushdwonConditions we should pushdown the Join by creating a single table scan node for that Join. 
+In visitJoin() we should have method to validate JdbcJoinPushdown Conditions that is explained in the document. If the JoinNode satisfies the JdbcJoinPushdown Conditions we should pushdown the Join by creating a single table scan node for that Join. 
 
 JoinPushdown should happen for InnerJoin. No other Join like LEFT JOIN, RIGHT JOIN, OUTER JOIN, CROSS JOIN, etc should not pushdown.
 
-Basic structure of JdbcJoinRenderByConnector optimizer is as follows
+Basic structure of GroupInnerJoinsByConnector optimizer is as follows
 
 
 ``` 
-public class JdbcJoinRenderByConnector
+public class GroupInnerJoinsByConnector
         implements PlanOptimizer
 {
 
-    public JdbcJoinRenderByConnector(Metadata metadata)
+    public GroupInnerJoinsByConnector(Metadata metadata)
     {
         -----
     }
@@ -480,7 +480,7 @@ TranslatedExpression<JdbcExpression> jdbcExpression = translateWith(
 Optional<JdbcExpression> translated = jdbcExpression.getTranslated();
 ```
 
-Now we could remove all the tables from the group which have no join criteria and having join criteria which is not able to pushdwon. The removed tables will add in the rewrittenSources as explained on step5
+Now we could remove all the tables from the group which have no join criteria and having join criteria which is not able to pushdown. The removed tables will add in the rewrittenSources as explained on step5
 
 7. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
 
@@ -533,10 +533,10 @@ return new FilterNode(Optional.empty(), idAllocator.getNextId(), joinNode, combi
 ```
 This FilterNode will pushdown to JoinNodes as its join criteria in later stage by the existing optimizers called PredicatePushdown Optimizer.
 
-Predicate Pushdown Optimizer will invoke after JdbcJoinRenderByConnector . Sample code is as follows
+Predicate Pushdown Optimizer will invoke after GroupInnerJoinsByConnector . Sample code is as follows
 ```
 if (ConfigUtil.getConfig(ENABLE_JDBC_JOIN_QUERY_PUSHDOWN)) {
-    builder.add(new JdbcJoinRenderByConnector(metadata, sqlParser));    
+    builder.add(new GroupInnerJoinsByConnector(metadata, sqlParser));    
     predicatePushDown = new StatsRecordingPlanOptimizer(optimizerStats, new PredicatePushDown(metadata, sqlParser, true));
     builder.add(predicatePushDown, simplifyRowExpressionOptimizer);
     
@@ -548,7 +548,7 @@ There should have a mechanism to enable connector (catalog) level JoinPushdown c
 
 If we do not set this flag (‘enable_federated_join_pushdown=false’) then no JoinPushdown should happened for this catalog even though the session join pushdown flag is enabled (refer point 2 for the details of session join push down flag).
 
-If we set this flag (‘enable_federated_join_pushdwon=true’) then JoinPushdown should happened for this catalog only if the session join pushdown flag is enabled (refer point 2 for the details of session join push down flag).
+If we set this flag (‘enable_federated_join_pushdown=true’) then JoinPushdown should happened for this catalog only if the session join pushdown flag is enabled (refer point 2 for the details of session join push down flag).
 
 11. Pushdown the overall filter to the newly created TableScanNode.
 After creating Single TableScanNode for grouped tables (refer point 7) we need to pushdown the FilterNode on connector level for the applicable filter and maintain the FilterNode for presto if it is not able to pushdown.For this there is no code change is expecting and it should work as part of point 9 activities. This need to confirm and validate at functional verification testing.
