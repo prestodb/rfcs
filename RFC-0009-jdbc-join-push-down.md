@@ -226,9 +226,9 @@ Then it does a cross join with these two results. We will not do pushdown in thi
 
 For performing Jdbc JoinPushdown we required below implementations :
 
-1. Create new PlanOptimizer called GroupInnerJoinsByConnector for JdbcJoinPushdown
+1. Create 2 Optimizers called GroupInnerJoinsByConnector and JdbcJoinPushdown
 
-For Join pushingdown we need to travers through the JoinNode. We are able to create a new optimizer (GroupInnerJoinsByConnector) which implement PlanOptimizer or could create a new Rule (JdbcJoinPushdown) for existing IterativeOptimizer for traversing the Node. Here the design is based on the new optimizer GroupInnerJoinsByConnector. For both cases the flow and design are same.
+For Join pushingdown we need to travers through the JoinNode. We are able to create a new optimizer (GroupInnerJoinsByConnector) which implements PlanOptimizer and another optimizer JdbcJoinPushdown which implements ConnectorPlanOptimizer.
 
  Below is the overall process that we have in GroupInnerJoinsByConnector optimizer
 
@@ -237,12 +237,14 @@ For Join pushingdown we need to travers through the JoinNode. We are able to cre
 After completing GroupInnerJoinsByConnector optimization we need to invoke predicate pushdown optimizer to recreate join criteria from the filter node of the JoinNode. The detailed implantation of GroupInnerJoinsByConnector optimizer is explained in below sessions. 
 
 Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
-Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called   MultiJoinNode
+Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
 Use MultiJoinNode to group Jdbc Tables based on connector name 
 Build join relation for the grouped tables from all the join predicates
 Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
 Recreate left deep join node from the MultiJoinNode source list
 Build overall filter for the newly created join node
+
+JdbcJoinPushdown Optimizer is added to the Logical Plan Optimizers Set of JdbcPlanOptimizerProvider.
 
 2. Load GroupInnerJoinsByConnector optimizer based on session flag
 
@@ -256,10 +258,9 @@ In GroupInnerJoinsByConnector optimize method we need to invoke Rewriter to rewr
 
 In visitJoin() we should have method to validate JdbcJoinPushdown Conditions that is explained in the document. If the JoinNode satisfies the JdbcJoinPushdown Conditions we should pushdown the Join by creating a single table scan node for that Join. 
 
-JoinPushdown should happen for InnerJoin. No other Join like LEFT JOIN, RIGHT JOIN, OUTER JOIN, CROSS JOIN, etc should not pushdown.
+JoinPushdown should happen for InnerJoin. No other Joins like LEFT JOIN, RIGHT JOIN, OUTER JOIN, CROSS JOIN, etc should be pushed down.
 
-Basic structure of GroupInnerJoinsByConnector optimizer is as follows
-
+Basic structure of GroupInnerJoinsByConnector optimizer is as follows :
 
 ``` 
 public class GroupInnerJoinsByConnector
@@ -305,9 +306,9 @@ public class GroupInnerJoinsByConnector
 ```
 4. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
 
-If a JoinNode satisfies all JdbcJoinPushdown requirement, then the very first step is to break the left deep tree structure of JoinNode and create a flatten structure called MultiJoinNode.
+If a JoinNode satisfies all JdbcJoinPushdown requirement, then the very first step is to break the left deep tree structure of JoinNode and create a flattened structure called MultiJoinNode.
 
-On visitJoin(), the core logic is starting by flattening the JoinNode tables into a list. We also required to flatten all the predicate including Join predicate and filter predicate into a single filter list. We separate all the output variables and assignments against the connector and keep for further processing. This flatten result will keep in a data structure called MultiJoinNode.
+On visitJoin(), the core logic is started by flattening the JoinNode tables into a list. We also require to flatten all the predicates including Join predicate and filter predicate into a single filter list. We separate all the output variables and assignments against the connector and keep for further processing. This flatten result will keep in a data structure called MultiJoinNode.
 
 ```
 class MultiJoinNode
@@ -378,7 +379,7 @@ private void flattenNode(PlanNode resolved)
 }
 ``` 
 
-Here the sources contains all the tables (irrespective of connector) of that JoinNode, filters contains all the predicate of that JoinNode. Now we completed the flattening of JoinNode.
+Here the sources contain all the tables (irrespective of connector) of that JoinNode, filters contain all the predicate of that JoinNode. Now we have completed the flattening of JoinNode.
 
 5. Use MultiJoinNode to group Jdbc Tables based on connector name 
 
