@@ -557,13 +557,13 @@ After creating Single TableScanNode for grouped tables (refer point 7) we need t
 12. Create JoinQuery based on JdbcConnector
 At present we are focusing on common operators =, <, >, <=, >= and !=  with common datatype like int, bigint, float, real, string, varchar, char. So there is no connector level implementation required and focusing on single implementation for all supported Jdbc connector through QueryBuilder class.
 
-Now we have new TableScanNod with list of joinTables. The split manager works on JdbcSplit and provide objects for processing on connector level. We need to modify the logic to transfer the new object (Optional<List<JoinTables>> joinTables) too, to the connector level. Currently, for the Join query, the split is transfer to buildSql() to create the select statement. If the split contains ‘joinTables’ details then we need to transfer this ‘joinTables’ details to the new method called ‘buildJoinSql()’ where we need to create and return join query instead of select query.
+Now we have new TableScanNode with list of joinTables. The split manager works on JdbcSplit and provide objects for processing on connector level. We need to modify the logic to transfer the new object (Optional<List<ConnectorTableHandle>> joinPushdownTables) too, to the connector level. Currently, for the Join query, the split is transfer to buildSql() to create the select statement. If the split contains ‘joinTables’ details then we need to transfer this ‘joinTables’ details to the new method called ‘buildJoinSql()’ where we need to create and return join query instead of select query.
 
-On buildJoinSql(), we need to handle select column, left tables, right join tables, join condition and filter condition.
+On buildJoinSql(), we need to handle select column, all the tables, join condition and filter condition.
 
 Handling From Table.
 
-The parameter  ‘Optional<List<JoinTables>> joinTables’ that received on buildJoinSql() contains the tables in an order to join.  We could use this list of tables as from tables
+The parameter  ‘List<ConnectorTableHandle> joinTables’ that received on buildJoinSql() contains the tables in an order to join.  We could use this list of tables as from tables
 
 Handling Select Column
 
@@ -575,7 +575,7 @@ We need not consider the JoinType, but we need to write the join query in the fo
 
 Handling Join criteria
 
-The Join criteria is also available additional predicate input
+The Join criteria is also available in Optional<JdbcExpression> additionalPredicate.
 
 Resolving Assignment
 
@@ -584,8 +584,6 @@ The select column name and join criteria may be available as an expression and s
 Handling Filter
 
 There is no change expected but we may need to handle the assignment and alias.
-
-
 
 ## [Optional] Metrics
 
