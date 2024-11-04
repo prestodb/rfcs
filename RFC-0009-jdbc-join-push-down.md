@@ -153,13 +153,11 @@ GroupInnerJoinsByConnector optimizer is a PlanOptimizer which is responsible for
 GroupInnerJoinsByConnector optimizer will work on MultiJoinNode and will group TableScanNodes based on connector name if the connector supports join pushdown. This optimizer will create a single TableScanNode by using a new data structure called ConnectorTableHandleSet from the grouped TableScanNode. ConnectorTableHandleSet is a set of ConnectorTableHandles which is generated from grouped TableScanNode. This optimizer also creates a combined overall predicate and overall assignments for the ConnectorTableHandleSet and will add these to the newly created TableScanNode. This newly created TableScanNode structure will replace the source list of MultiJoinNode.
 GroupInnerJoinsByConnector optimizer will then work on re-creating join node with updated MultiJoinNode structure. The low level design is available [here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#low-level-design)
 
-![After GroupInnerJoinsByConnector Optimizer](RFC-0009-jdbc-join-push-down/after_Group_opt.png)  
+![GroupInnerJoinsByConnector optimizer](RFC-0009-jdbc-join-push-down/after_GroupInnerJoinsByConnector.png)
 
 JdbcJoinPushdown optimizer is a ConnectorPlanOptimizer, specific to jdbc tables and it generate a single JdbcTableHandle from the grouped ConnectorTableHandle. The low level design is available [here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#low-level-design)
 
 After GroupInnerJoinsByConnector optimizer and JdbcJoinPushdown optimizer, we will invoke existing Predicatepushdown optimizer. PredicatePushdown optimizer will pushdown the filter and join criteria to the re-created JoinNode using the overall predicate and overall assignment. 
-
-![Predicatepushdown optimizer](RFC-0009-jdbc-join-push-down/after_GroupInnerJoinsByConnector.png)
 
 After Predicatepushdown optimizer the flow will invoke existing JdbcComputePushdown optimizer and it will pushdown the overall join criteria to the additional predicates.
 
@@ -230,9 +228,7 @@ For performing Jdbc JoinPushdown we required below implementations :
 
 For Join pushingdown we need to travers through the JoinNode. We are able to create a new optimizer (GroupInnerJoinsByConnector) which implements PlanOptimizer and another optimizer JdbcJoinPushdown which implements ConnectorPlanOptimizer.
 
- Below is the overall process that we have in GroupInnerJoinsByConnector optimizer
-
-![Image 1](RFC-0009-jdbc-join-push-down/in-depth-design-image-1.png)
+Below is the overall process that we have in GroupInnerJoinsByConnector optimizer
 
 After completing GroupInnerJoinsByConnector optimization we need to invoke predicate pushdown optimizer to recreate join criteria from the filter node of the JoinNode. The detailed implantation of GroupInnerJoinsByConnector optimizer is explained in below sessions. 
 
