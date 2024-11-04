@@ -544,6 +544,16 @@ Create a TableScanNode structure which is able to hold all the jdbc table which 
 
 Here we are able to iterate through grouped list against a connector and able to create JoinTables for each TableScanNode. Using this list of JoinTables we are creating a single TableScanNode for that connector. This Single table scan node is added to the rewrittenSources list to create MultiJoinNode source. 
 
+### Changes required in JdbcSplit
+
+We have added a new feild called joinTables in JdbcSplit.java
+
+```
+private final Optional<List<ConnectorTableHandle>> joinTables;
+```
+
+This means we will also require some changes in buildSql() and getSplits() of BaseJdbcClientj.java to pass the new feild to QueryBuilder.java
+
 ### Create Join Query in QueryBuilder
 
 At present we are focusing on common operators =, <, >, <=, >= and !=  with common datatype like int, bigint, float, real, string, varchar, char. So there is no connector level implementation required and focusing on single implementation for all supported Jdbc connector through QueryBuilder class.
@@ -556,11 +566,9 @@ On buildJoinSql(), we need to handle columns to be selected, the tables from whi
 
 The select column needs to resolve from the above input argument List<JdbcColumnHandle> columns
 
-
 #### Handling From tables.
 
 The parameter  ‘List<ConnectorTableHandle> joinTables’ that received on buildJoinSql() contains the tables in an order to join.  We could use this list of tables as from tables
-
 
 #### Handling JoinType
 
