@@ -1,6 +1,6 @@
 # **RFC0009-jdbc-join-push-down for Presto**
 
-## Jdbc join pushdown in presto
+## Jdbc join push down in presto
 
 Proposers
 
