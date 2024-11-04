@@ -481,7 +481,7 @@ Now we can remove all the tables from the group which have no join criteria and 
 
 7. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
 
-Create a TableScanNode structure which is able to hold all the jdbc table  which  is grouped as part of above implementation.  Below is the proposed structure for the new TableScanNode
+Create a TableScanNode structure which is able to hold all the jdbc table which is grouped as part of above implementation. Below is the proposed structure for the new TableScanNode
 
 ![Image 2](RFC-0009-jdbc-join-push-down/in-depth-design-image-2.png)
 
@@ -490,7 +490,7 @@ Create a TableScanNode structure which is able to hold all the jdbc table  which
 Here we are able to iterate through grouped list against a connector and able to create JoinTables for each TableScanNode. Using this list of JoinTables we are creating a single TableScanNode for that connector. This Single table scan node is added to the rewrittenSources list to create MultiJoinNode source. 
 
 8. Recreate left deep join node from the MultiJoinNode source list
-Now we have rewrittenSources list which contains new single TableScanNode (for grouped tables) and other normal TableScanNode which are not able to group. Using the rewrittenSources list recreate MultiJoinNode.Using MultiJoinNode we are able to recreate LeftDeepJoinTree by following ReorderJoins Rule. Sample code is as follows
+Now we have rewrittenSources list which contains new single TableScanNode (for grouped tables) and other normal TableScanNode which are not able to group. Using the rewrittenSources list we recreate MultiJoinNode. Using MultiJoinNode we are able to recreate LeftDeepJoinTree by following ReorderJoins Rule. Sample code is as follows :
 
 ```
 private static PlanNode createJoin(int index, List<PlanNode> sources, PlanNodeIdAllocator idAllocator)
@@ -519,8 +519,9 @@ private static PlanNode createJoin(int index, List<PlanNode> sources, PlanNodeId
             ImmutableMap.of());
 }
 ```
+
 9. Build overall filter for the newly created join node
-While we create MultiJoinNode we separated all the FilterNode by getting its predicate  and adding the predicate to a set called filters. Again we flatten the join criteria against each join node and create a row expression called joinFilter. This need to use to create an overall predicate list and using the overall predicate list we need to create a FilterNode on top of recreated left deep JoinNode. 
+While we create MultiJoinNode we separated all the FilterNodes by getting its predicate and adding the predicate to a set called filters. Again we flatten the join criteria against each join node and create a row expression called joinFilter. This is needed to create an overall predicate list. Using the overall predicate list we need to create a FilterNode on top of recreated left deep JoinNode. 
 
 ```
 PlanNode joinNode //Recreate left deep join node from the MultiJoinNode source list
@@ -531,6 +532,7 @@ return new FilterNode(Optional.empty(), idAllocator.getNextId(), joinNode, combi
 This FilterNode will pushdown to JoinNodes as its join criteria in later stage by the existing optimizers called PredicatePushdown Optimizer.
 
 Predicate Pushdown Optimizer will invoke after GroupInnerJoinsByConnector . Sample code is as follows
+
 ```
 if (ConfigUtil.getConfig(ENABLE_JDBC_JOIN_QUERY_PUSHDOWN)) {
     builder.add(new GroupInnerJoinsByConnector(metadata, sqlParser));    
@@ -539,6 +541,7 @@ if (ConfigUtil.getConfig(ENABLE_JDBC_JOIN_QUERY_PUSHDOWN)) {
     
 }
 ```
+
 10. Enable JdbcJoinPushdown at connector level and session level 
 
 There should have a mechanism to enable connector (catalog) level JoinPushdown capabilities. We need to bring a new flag on catalog.properties file (Eg: postgresql.properties) say enable_federated_join_pushdown.
@@ -548,7 +551,7 @@ If we do not set this flag (‘enable_federated_join_pushdown=false’) then no 
 If we set this flag (‘enable_federated_join_pushdown=true’) then JoinPushdown should happened for this catalog only if the session join pushdown flag is enabled (refer point 2 for the details of session join push down flag).
 
 11. Pushdown the overall filter to the newly created TableScanNode.
-After creating Single TableScanNode for grouped tables (refer point 7) we need to pushdown the FilterNode on connector level for the applicable filter and maintain the FilterNode for presto if it is not able to pushdown.For this there is no code change is expecting and it should work as part of point 9 activities. This need to confirm and validate at functional verification testing.
+After creating Single TableScanNode for grouped tables (refer point 7) we need to pushdown the FilterNode on connector level for the applicable filter and maintain the FilterNode for presto if it is not able to pushdown. For this there is no code change and it should work as part of point 9 activities.
 
 12. Create JoinQuery based on JdbcConnector
 At present we are focusing on common operators =, <, >, <=, >= and !=  with common datatype like int, bigint, float, real, string, varchar, char. So there is no connector level implementation required and focusing on single implementation for all supported Jdbc connector through QueryBuilder class.
