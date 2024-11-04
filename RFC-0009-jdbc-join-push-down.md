@@ -167,7 +167,7 @@ After all optimization the PlanNode will pass to the presto-base-jdbc module to 
 
 Presto validate Join operation (PlanNode) specifications to perform join pushdown. The specifics for the supported pushdown of table joins varies for each data source, and therefore for each connector. However, there are some generic conditions that must be met in order for a join to be pushed down in jdbc connector
 
-1) The Jdbc connector should be able to process the Join operation.
+1) **The Jdbc connector should be able to process the Join operation.**
 
 Presto Jdbc connector will process almost every Join operation except presto functions and operators. 
 
@@ -181,7 +181,7 @@ When we use some aggregate, math operations or datatype conversion along with jo
 | 3  | cast(varchar_20_column, varchar(100)) = varchar100_column       | `Select * from table a join table b on cast(a.varchar_20_column, varchar(100)) = b.varchar100_column;` 
 
 
-2) Join operation should be an inner join and should have at least one column to join with another table.
+2) **Join operation should be an inner join and should have at least one column to join with another table.**
 
 Note: Other optimizers in Presto may change the Join operation. We can call this as Inference. Sometimes presto will change a Pushdown capable Inner join to another Join operation incapable of pushdown (Eg: Infering to remove join condition/predicate in the plan). This will lead to pushdown capability being removed. And sometimes presto will change Join operation to a pushdown capable one. (Eg: Infering to create Inner join from Right/Left join)
 
@@ -199,7 +199,7 @@ Presto will change this from an inner join to two different select statements li
 
 Then it does a cross join with these two results. We will not do pushdown in this case.
 
-3) Join criteria (joining column) should be of Datatypes and operators that support join pushdown. 
+3) **Join criteria (joining column) should be of Datatypes and operators that support join pushdown.**
 
 | No | DataType support join pushdown                   | Operations                                           |
 |----|-------------------------------------|-------------------------------------------------------------------|
@@ -216,9 +216,9 @@ Then it does a cross join with these two results. We will not do pushdown in thi
 | 11 | Char           | `=, <, >, <=, >=, !=, <>`                    |
 
 
-4) All tables from same connector will be grouped based on above specifications and pushed down to underlying datasource. 
+4) **All tables from same connector will be grouped based on above specifications and pushed down to underlying datasource.**
 
-5) Enable presto Join pushdown capabilities by setting the session flag enable-join-query-pushdown = true.
+5) **Enable presto Join pushdown capabilities by setting the session flag enable-join-query-pushdown = true.**
 
 ## Low level Design
 
