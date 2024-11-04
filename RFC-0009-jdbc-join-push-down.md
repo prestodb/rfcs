@@ -609,4 +609,18 @@ Based on the discussion, this may need to be updated with feedback from reviewer
 
 ## Test Plan
 
-How do we ensure the feature works as expected? Mention if any functional tests/integration tests are needed. Special mention for product-test changes. If any PoC has been done already, please mention the relevant test results here that you think will bolster your case of getting this RFC approved.
+Added 3 new test classes - TestJdbcJoinPushdown, TestJdbcQueryBuilderJoinPushdown, TestJdbcQueryBuilderJoinPushdownExtended
+Added 1 new class TestJoinQueriesWithPushDown which extends AbstractTestJoinQueries. 
+Total 221 new test cases - all are passing
+
+All the test cases in AbstractTestJoinQueries are passing with the join pushdown flag enabled. This gives us a lot of confidence on the correctness of the implementation.
+
+We have done a POC on the implementation and we were able to see following performance improvements : 
+
+![Performance Image 1](RFC-0009-jdbc-join-push-down/perf_1.png)
+
+![Performance Image 2](RFC-0009-jdbc-join-push-down/perf_2.png)
+
+![Performance Image 3](RFC-0009-jdbc-join-push-down/perf_3.png)
+
+![Performance Image 4](RFC-0009-jdbc-join-push-down/perf_4.png)
