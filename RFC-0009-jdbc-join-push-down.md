@@ -550,15 +550,17 @@ At present we are focusing on common operators =, <, >, <=, >= and !=  with comm
 
 Now we have new TableScanNode with list of joinTables. The split manager works on JdbcSplit and provide objects for processing on connector level. We need to modify the logic to transfer the new object (Optional<List<ConnectorTableHandle>> joinPushdownTables) too, to the connector level. Currently, for the Join query, the split is transfer to buildSql() to create the select statement. If the split contains ‘joinTables’ details then we need to transfer this ‘joinTables’ details to the new method called ‘buildJoinSql()’ where we need to create and return join query instead of select query.
 
-On buildJoinSql(), we need to handle select column, all the tables, join condition and filter condition.
+On buildJoinSql(), we need to handle columns to be selected, the tables from which to query, the join condition and filter conditions if any.
 
-#### Handling From Table.
+#### Handling Select columns
+
+The select column needs to resolve from the above input argument List<JdbcColumnHandle> columns
+
+
+#### Handling From tables.
 
 The parameter  ‘List<ConnectorTableHandle> joinTables’ that received on buildJoinSql() contains the tables in an order to join.  We could use this list of tables as from tables
 
-#### Handling Select Column
-
-The select column needs to resolve from the above input argument List<JdbcColumnHandle> columns
 
 #### Handling JoinType
 
