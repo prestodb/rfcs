@@ -528,13 +528,13 @@ if (ConfigUtil.getConfig(ENABLE_JDBC_JOIN_QUERY_PUSHDOWN)) {
 }
 ```
 
-### JdbcJoinPushdown optimizer
+### 2. JdbcJoinPushdown optimizer
 
 ![JdbcJoinPushdown optimizer](RFC-0009-jdbc-join-push-down/After_JdbcJoinPushdown.png)
 
 In JdbcJoinPushdown we override visitTableScan() from ConnectorPlanOptimizer to create a new newTableHandle and new TableScanNode with the combined details in JDBC level. 
 
-#### Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
+#### 2.1. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
 
 Create a TableScanNode structure which is able to hold all the jdbc table which is grouped as part of above implementation. Below is the proposed structure for the new TableScanNode
 
@@ -544,7 +544,7 @@ Create a TableScanNode structure which is able to hold all the jdbc table which 
 
 Here we are able to iterate through grouped list against a connector and able to create JoinTables for each TableScanNode. Using this list of JoinTables we are creating a single TableScanNode for that connector. This Single table scan node is added to the rewrittenSources list to create MultiJoinNode source. 
 
-### Changes required in JdbcSplit
+### 3. Changes required in JdbcSplit
 
 We have added a new feild called joinTables in JdbcSplit.java
 
@@ -554,7 +554,7 @@ private final Optional<List<ConnectorTableHandle>> joinTables;
 
 This means we will also require some changes in buildSql() and getSplits() of BaseJdbcClientj.java to pass the new feild to QueryBuilder.java
 
-### Create Join Query in QueryBuilder
+### 4. Create Join Query in QueryBuilder
 
 At present we are focusing on common operators =, <, >, <=, >= and !=  with common datatype like int, bigint, float, real, string, varchar, char. So there is no connector level implementation required and focusing on single implementation for all supported Jdbc connector through QueryBuilder class.
 
@@ -562,33 +562,33 @@ Now we have new TableScanNode with list of joinTables. The split manager works o
 
 On buildJoinSql(), we need to handle columns to be selected, the tables from which to query, the join condition and filter conditions if any.
 
-#### Handling Select columns
+#### 4.1. Handling Select columns
 
 The select column needs to resolve from the above input argument List<JdbcColumnHandle> columns
 
-#### Handling From tables.
+#### 4.2. Handling From tables.
 
 The parameter  ‘List<ConnectorTableHandle> joinTables’ that received on buildJoinSql() contains the tables in an order to join.  We could use this list of tables as from tables
 
-#### Handling JoinType
+#### 4.3. Handling JoinType
 
 We need not consider the JoinType, but we need to write the join query in the form of where clause. 
 
-#### Handling Join criteria
+#### 4.4. Handling Join criteria
 
 The Join criteria is also available in Optional<JdbcExpression> additionalPredicate.
 
-#### Resolving Assignment
+#### 4.5. Resolving Assignment
 
 The select column name and join criteria may be available as an expression and so each column (expression) we need to resolve from exact table assignement. Against each  JoinTables we have assignments object and we need to extract the actual table name and column name from this assignment for each select and criteria column.
 
-#### Handling Filter
+#### 4.6. Handling Filter
 
 There is no change expected but we may need to handle the assignment and alias.
 
-### Session flag
+### 5. Session flag
 
-#### Enable JdbcJoinPushdown at connector level and session level 
+#### 5.1. Enable JdbcJoinPushdown at connector level and session level 
 
 There should have a mechanism to enable connector (catalog) level JoinPushdown capabilities. We need to bring a new flag on catalog.properties file (Eg: postgresql.properties) say enable_federated_join_pushdown.
 
@@ -596,9 +596,9 @@ If we do not set this flag (‘enable_federated_join_pushdown=false’) then no 
 
 If we set this flag (‘enable_federated_join_pushdown=true’) then JoinPushdown should happened for this catalog only if the session join pushdown flag is enabled (refer point 2 for the details of session join push down flag).
 
-### Predicate Pushdown
+### 6. Predicate Pushdown
 
-#### Pushdown the overall filter to the newly created TableScanNode.
+#### 6.1. Pushdown the overall filter to the newly created TableScanNode.
 After creating Single TableScanNode for grouped tables (refer point 7) we need to pushdown the FilterNode on connector level for the applicable filter and maintain the FilterNode for presto if it is not able to pushdown. For this there is no code change and it should work as part of point 9 activities.
 
 ## [Optional] Metrics
