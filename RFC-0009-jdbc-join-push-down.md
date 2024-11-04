@@ -594,6 +594,9 @@ After creating Single TableScanNode for grouped tables (refer point 7) we need t
 
 How can we measure the impact of this feature?
 
+We can see the impact in the performance improvement in Inner Join Queries involving JDBC connectors.
+We can also see the change in the Plan that is created by Presto. This can be observed by executing EXPLAIN or EXPLAIN ANALYZE queries.
+
 ## [Optional] Other Approaches Considered
 
 Based on the discussion, this may need to be updated with feedback from reviewers.
