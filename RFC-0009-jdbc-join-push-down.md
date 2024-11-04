@@ -95,7 +95,7 @@ At present, if presto get a join query (from the CLI or UI) which is trying to j
 
 Basically the PlanNode or the Plan is a tree datastructure which represents the sql query. When a join Query is received in logical planning, presto creates a PlanNode with a JoinNode. JoinNode is a tree structure which can hold another node, left table, right table, join conditions, projections and filters related to that join query. If there are multiple tables to join then it create a join tree structure where the left side of the JoinNode will be another JoinNode which hold sub joins to resolve multiple tables. The logical PlanNode is created in such a way, where the first table (the first table in the from clause) is resolved first either from the left TableScanNode or from JoinNode hierarchy using left dept first algorithm, then its adjacent table (very next table) as right side.  So the order and position of the tables in the join query plays an important role to determine query pushdown. Below is the example of PlanNode that is created for the join query.
 
- ![PlanNode](RFC-0009-jdbc-join-push-down/Existing_prestoPlan.png) 
+![PlanNode](RFC-0009-jdbc-join-push-down/Existing_prestoPlan.png) 
 
 Currently while executing a JoinNode, presto creates separate TableScanNodes for each table that is participating in the join query. This TableScanNode info is used by the connector to create the select query for that table. On top of this select query result, presto apply join condition and other predicates to provide the final result.
 
@@ -223,6 +223,8 @@ Then it does a cross join with these two results. We will not do pushdown in thi
 ## Low level Design
 
 For performing Jdbc JoinPushdown we required below implementations :
+
+### GroupInnerJoinsByConnector optimizer
 
 1. Create 2 Optimizers called GroupInnerJoinsByConnector and JdbcJoinPushdown
 
@@ -407,8 +409,6 @@ Using the rewrittenSources we will create a new MultiJoinNode and that will be u
 In GroupInnerJoinsByConnector we have joinPushdownCombineSources() method for doing this. This creates a MultiJoinNode object rewrittenMultiJoinNode. That is then passed to 
 createLeftDeepJoinTree to creates a joinNode and in turn creates a filterNode.
 
-In JdbcJoinPushdown we override visitTableScan() from ConnectorPlanOptimizer to create a new newTableHandle and new TableScanNode with the combined details in JDBC level. 
-
 Thus we could create a group of tables against each catalog. Again every tables on the Jdbc catalog cannot pushed down and we should ensure there is at least one joining criteria against the grouped tables to avoid cross join at connector level. For example consider below query
 
 ```
@@ -579,6 +579,12 @@ The select column name and join criteria may be available as an expression and s
 Handling Filter
 
 There is no change expected but we may need to handle the assignment and alias.
+
+### JdbcJoinPushdown optimizer
+
+![JdbcJoinPushdown optimizer](RFC-0009-jdbc-join-push-down/After_JdbcJoinPushdown.png)
+
+In JdbcJoinPushdown we override visitTableScan() from ConnectorPlanOptimizer to create a new newTableHandle and new TableScanNode with the combined details in JDBC level. 
 
 ## [Optional] Metrics
 
