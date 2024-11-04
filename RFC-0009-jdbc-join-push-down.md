@@ -428,13 +428,13 @@ Now we group table1 and table2 based on catalog pg. The table3 and table4 group 
 
 The MultiJoinNode already flattened the join criteria  and created the overall join predicate list called joinFilter. We are able to re-create the equality and inequality inference for joinFilter using existing presto EqualityInference methods.
 
-The approach is that we could recreate the overall join ‘on clause’ against the grouped table and check which all grouped tables are participated on that join clause. If there is any table which is not participated on any one of the join clause that we could remove from the grouped list and add to rewrittenSources. Once you identify the tables related to join ‘on clause’ then we should pass the join ‘on clause’  to connector level for executing it. So it should be understand by the connector. That means we should remove tables from the group list which ‘on clause’ cannot process by the underlying connector and will dd on rewrittenSources.
+The approach is that we could recreate the overall join ‘on clause’ against the grouped table and check which all grouped tables are participated on that join clause. If there is any table which is not participating on any one of the join clause then we could remove it from the grouped list and add it to rewrittenSources. Once you identify the tables related to join ‘on clause’ then we should pass the join ‘on clause’  to connector level for executing it. So it could be understood by the connector. That means we should remove tables from the group list which ‘on clause’ cannot process by the underlying connector and will add to rewrittenSources.
 
-Here we could summarize the activities as two
+Summarizing the activities as two :
 
 Recreate join ‘on criteria’ aginst grouped table and remove tables which are not participated on ‘on criteria’
 
-Remove tables from groups if the tables ‘on criteria’ is not able to process by the connector.
+Remove tables from groups if the tables ‘on criteria’ is not able to be processed by the connector.
 
 6.1. Recreate join criteria for grouped tables
 
@@ -458,11 +458,11 @@ Set<RowExpression> inequalityPredicateSet = StreamSupport.stream(inequalityPredi
 List<RowExpression> scopedInequalities = getExpressionsWithinVariableScope(inequalityPredicateSet, combinedOutputVariables);
 ```
 
-Now we have list of equiJoinFilters and inequalityPredicateSet. Then we need to remove tables which are not part of these predicate and the part of the predicate which cannot execute by  the connector
+Now we have list of equiJoinFilters and inequalityPredicateSet. Then we need to remove tables which are not part of these predicates and part of the predicate which cannot be executed by the connector.
 
-6.2. Remove tables from groups if the tables ‘on criteria’ is not able to process by the connector.
+6.2. Remove tables from groups if the tables ‘on criteria’ is not able to be processed by the connector.
 
-After creating list of equality and inequality filters we are able to translate this predicate to JdbcExpression using existing JdbcFilterToSqlTranslator. Sample code is available on JdbcComputePushdown optimizer visitFilter().Code snippet  from JdbcComputePushdown optimizer visitFilter() is as follows we could reuse the code in JdbcTableHandle to check whether there is any JdbcExpression is created or not. 
+After creating list of equality and inequality filters we are able to translate this predicate to JdbcExpression using existing JdbcFilterToSqlTranslator. Sample code is available on JdbcComputePushdown optimizer visitFilter(). Code snippet  from JdbcComputePushdown optimizer visitFilter() is as follows. We can reuse the code in JdbcTableHandle to check whether there is any JdbcExpression created or not. 
 
 ```
 RowExpression predicate = expressionOptimizer.optimize(node.getPredicate(), OPTIMIZED, session);
@@ -477,7 +477,7 @@ TranslatedExpression<JdbcExpression> jdbcExpression = translateWith(
 Optional<JdbcExpression> translated = jdbcExpression.getTranslated();
 ```
 
-Now we could remove all the tables from the group which have no join criteria and having join criteria which is not able to pushdown. The removed tables will add in the rewrittenSources as explained on step5
+Now we can remove all the tables from the group which have no join criteria and having join criteria which are not able to pushdown. The removed tables will be added in the rewrittenSources as explained on step5
 
 7. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
 
