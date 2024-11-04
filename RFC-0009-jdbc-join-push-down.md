@@ -517,17 +517,6 @@ return new FilterNode(Optional.empty(), idAllocator.getNextId(), joinNode, combi
 ```
 This FilterNode will pushdown to JoinNodes as its join criteria in later stage by the existing optimizers called PredicatePushdown Optimizer.
 
-Predicate Pushdown Optimizer will invoke after GroupInnerJoinsByConnector . Sample code is as follows
-
-```
-if (ConfigUtil.getConfig(ENABLE_JDBC_JOIN_QUERY_PUSHDOWN)) {
-    builder.add(new GroupInnerJoinsByConnector(metadata, sqlParser));    
-    predicatePushDown = new StatsRecordingPlanOptimizer(optimizerStats, new PredicatePushDown(metadata, sqlParser, true));
-    builder.add(predicatePushDown, simplifyRowExpressionOptimizer);
-    
-}
-```
-
 ### 2. JdbcJoinPushdown optimizer
 
 ![JdbcJoinPushdown optimizer](RFC-0009-jdbc-join-push-down/After_JdbcJoinPushdown.png)
