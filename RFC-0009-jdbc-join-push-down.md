@@ -159,7 +159,7 @@ JdbcJoinPushdown optimizer is a ConnectorPlanOptimizer, specific to jdbc tables 
 
 After GroupInnerJoinsByConnector optimizer and JdbcJoinPushdown optimizer, we will invoke existing Predicatepushdown optimizer. PredicatePushdown optimizer will pushdown the filter and join criteria to the re-created JoinNode using the overall predicate and overall assignment. 
 
-![Predicatepushdown optimizer](RFC-0009-jdbc-join-push-down/after_predicate.png)
+![Predicatepushdown optimizer](RFC-0009-jdbc-join-push-down/after GroupInnerJoinsByConnector.png)
 
 After Predicatepushdown optimizer the flow will invoke existing JdbcComputePushdown optimizer and it will pushdown the overall join criteria to the additional predicates.
 
