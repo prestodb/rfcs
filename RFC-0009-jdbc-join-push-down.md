@@ -408,10 +408,8 @@ for (PlanNode source : multiJoinNode.getSources()) {
 
 Using the rewrittenSources we will create a new MultiJoinNode and that will be used for final presto Join creation. That means in further steps we will create a single TableScanNode for each group and add that single TableScanNode to rewrittenSources from the sourcesByConnector map.
 
-For grouping Jdbc tables  we need two informations from ConnectorTableHandle. 
-
-
-In GroupInnerJoinsByConnector we have joinPushdownCombineSources() method for doing this.
+In GroupInnerJoinsByConnector we have joinPushdownCombineSources() method for doing this. This creates a MultiJoinNode object rewrittenMultiJoinNode. That is then passed to 
+createLeftDeepJoinTree to creates a joinNode and in turn creates a filterNode.
 
 In JdbcJoinPushdown we override visitTableScan() from ConnectorPlanOptimizer to create a new newTableHandle and new TableScanNode with the combined details in JDBC level. 
 
@@ -424,7 +422,7 @@ join pg.table2 pg2 on pg1.clmn1=pg2.clmn2
 join db2.table3 t3 on pg1.clmn1=t3.clmn
 join db2.table4 t4 on pg2.clmn1=t4.clmn
 ```
-Now we group table1 and table2 based on catalog pg. The table3 and table4 group based on catalog db2. But here db2 catalog tables does not have a join criteria within the db2 catalog tables and all join criteria relay on another pg catalog. And so we should not pushdown db2 tables and need to revert back from the grouped list. For that we could build join relation for the grouped tables from the predicates and if there is no valid join relation that table could send back to source list by removing from grouping list
+Now we group table1 and table2 based on catalog pg. The table3 and table4 group based on catalog db2. But here db2 catalog tables does not have a join criteria within the db2 catalog tables and all join criteria relay on another pg catalog. And so we should not pushdown db2 tables and need to revert back from the grouped list. For that we could build join relation for the grouped tables from the predicates and if there is no valid join relation that table would be send back to source list by removing it from the grouping list.
 
 6. Build join relation for the grouped tables from all the join predicates
 
