@@ -228,13 +228,21 @@ We are going to create a new optimizer (GroupInnerJoinsByConnector) which implem
 
 After completing GroupInnerJoinsByConnector optimization, JdbcJoinPushdown Optimizer will be invoked. After that predicate pushdown optimizer is invoked to recreate join criteria from the filter node of the JoinNode. The detailed implementations of GroupInnerJoinsByConnector and JdbcJoinPushdown optimizers are explained in below sessions. 
 
-JdbcJoinPushdown Optimizer is added to the Logical Plan Optimizers Set of JdbcPlanOptimizerProvider.
-
 Below is the overall process :
+1. GroupInnerJoinsByConnector Optimizer (new)
+2. JdbcJoinPushdown Optimizer (new)
+3. Predicate Pushdown Optimizer (existing)
+4. Jdbc compute Pushdown Optimizer (existing)
+5. Optimizing is over, execution starts
+6. From JdbcSplit the new values are passed to Query builder
+7. Query Builder checks if pushdown is happening and builds join query accordingly.
+8. The built join query is passed to BaseJdbcClient for execution.
 
 ### 1. GroupInnerJoinsByConnector optimizer
 
-#### 1.1. Create an Optimizers called GroupInnerJoinsByConnector
+GroupInnerJoinsByConnector Optimiser is implemented inside the presto-main module
+
+#### 1.1. Create an Optimizer called GroupInnerJoinsByConnector
 
 GroupInnerJoinsByConnector in brief : 
 1. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
@@ -552,6 +560,17 @@ return new FilterNode(Optional.empty(), idAllocator.getNextId(), joinNode, combi
 This FilterNode will pushdown to JoinNodes as its join criteria in later stage by the existing optimizers called PredicatePushdown Optimizer.
 
 ### 2. JdbcJoinPushdown optimizer
+
+JoinPushdown Optimiser is implemented inside the presto-base-jdbc module. This optimiser is called after GroupInnerJoinsByConnector. 
+
+How is it invoked ? 
+- JdbcJoinPushdown Optimizer is added to the Logical Plan Optimizers Set of JdbcPlanOptimizerProvider.
+- When this optimizer is called, it hits the optimize() method in the class. Inside that ConnectorPlanRewriter class calls it’s own override visitTableScan() method.
+
+Inside the visitTableScan() :
+- We check if connectorHanlde of tableHandle is an instance of ConnectorTableHandleSet
+- If that is the case, make a new JdbcTableHandle with joinTables as the tableHandles.getConnectorTableHandles()
+- If not, return the node.
 
 ![JdbcJoinPushdown optimizer](RFC-0009-jdbc-join-push-down/After_JdbcJoinPushdown.png)
 
