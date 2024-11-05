@@ -229,10 +229,10 @@ We are going to create a new optimizer (GroupInnerJoinsByConnector) which implem
 After completing GroupInnerJoinsByConnector optimization, JdbcJoinPushdown Optimizer will be invoked. After that predicate pushdown optimizer is invoked to recreate join criteria from the filter node of the JoinNode. The detailed implementations of GroupInnerJoinsByConnector and JdbcJoinPushdown optimizers are explained in below sessions. 
 
 Below is the overall process :
-1. GroupInnerJoinsByConnector Optimizer (new)
-2. JdbcJoinPushdown Optimizer (new)
-3. Predicate Pushdown Optimizer (existing)
-4. Jdbc compute Pushdown Optimizer (existing)
+1. Run GroupInnerJoinsByConnector Optimizer (new)
+2. Run JdbcJoinPushdown Optimizer (new)
+3. Run Predicate Pushdown Optimizer (existing)
+4. Run Jdbc compute Pushdown Optimizer (existing)
 5. Optimizing is over, execution starts
 6. From JdbcSplit the new values are passed to Query builder
 7. Query Builder checks if pushdown is happening and builds join query accordingly.
