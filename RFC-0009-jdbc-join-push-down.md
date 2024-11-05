@@ -600,8 +600,7 @@ Inside the visitTableScan() :
 JdbcJoinPushdown optimizer will create a TableScanNode structure which is able to hold all the jdbc tables which are grouped as part of above implementation. Below is the proposed structure for the new TableScanNode
 
 ![Image 2](RFC-0009-jdbc-join-push-down/in-depth-design-image-2.png)
-
-![Image 3](RFC-0009-jdbc-join-push-down/in-depth-design-image-3.png)
+^ fix this image.. change to connectotablehandle set
 
 ## Changes required in JdbcSplit
 
@@ -668,10 +667,16 @@ GroupInnerJoinsByConnector optimizer will be invoked based on session flag 'opti
 If the flag is set ('optimizer-inner-join-pushdown-enabled=true'), then it's optimize method will be invoked.
 If it is not set ('optimizer-inner-join-pushdown-enabled=false' or the flag is not set) then it's optimize method will not be invoked.
 
-## Predicate Pushdown
+## PredicatePushDown Optimizer
 
-#### 1. Pushdown the overall filter to the newly created TableScanNode.
-After creating Single TableScanNode for grouped tables (refer point 7) we need to pushdown the FilterNode on connector level for the applicable filter and maintain the FilterNode for presto if it is not able to pushdown. For this there is no code change required.
+#### Pushdown the overall filter to the newly created TableScanNode.
+After creating Single TableScanNode for grouped tables (refer point 7) we need to pushdown the FilterNode (join criteria specific to the grouped tables of new tableScanNode and all filters specific to the group tables) on connector level for the applicable filter and maintain the FilterNode for presto if it is not able to pushdown. For this we are just invoking predicate pushdown after jdbc join pushdown optimizer and there is no code change.
+
+^ add image to this 
+
+## JdbcComputePushdown Optimizer
+Using JdbcComputePushdown optimizer, we are pushing down the join criteria as additional predicate. For doing this, we enhanced JdbcComputePushdown optimizer 
+
 
 ## [Optional] Metrics
 
