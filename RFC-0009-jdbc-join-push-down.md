@@ -268,7 +268,8 @@ public Set<ConnectorCapabilities> getCapabilities()
 - 5.3. This rewrittenList is used to create another multiJoinNode (rewrittenMultiJoinNode).
 #### 6. Create a joinNode for each sourceList
 - 6.1. Iterate over the rewrittenMultiJoinNode, for each sourceList, call createLeftDeepJoinTree() method. This creates a joinNode with all the nodes in the sourceList.
-#### 7. A new FilterNode is created with the combinedFilters of the multiJoinNode as the predicate. This is finally returned.
+#### 7. Create a filterNode on top of this joinNode
+- A new FilterNode is created with the combinedFilters of the multiJoinNode as the predicate. This is finally returned.
 ```
 private PlanNode createLeftDeepJoinTree(MultiJoinNode multiJoinNode, PlanNodeIdAllocator idAllocator)
 {
