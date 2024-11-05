@@ -248,7 +248,16 @@ GroupInnerJoinsByConnector in brief :
 #### 2. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
 - 2.1. Presto already has an existing data structure called multiJoinNode which is used to flatten Plan nodes into list of source nodes. We are using a similar approach to create multiJoinNode.
 #### 3. Use MultiJoinNode to group Jdbc Tables based on connector name
-- 3.1. We take each item of SourceList and check if it’s a connector which supports join push down. For this we have introduced a new capability in ConnectorCapabilities named "SUPPORTS_JOIN_PUSHDOWN”. 
+- 3.1. We take each item of SourceList and check if it’s a connector which supports join push down. For this we have introduced a new capability in ConnectorCapabilities named "SUPPORTS_JOIN_PUSHDOWN”.
+```
+public enum ConnectorCapabilities
+{
+    NOT_NULL_COLUMN_CONSTRAINT,
+    SUPPORTS_REWINDABLE_SPLIT_SOURCE,
+    SUPPORTS_PAGE_SINK_COMMIT,
+    SUPPORTS_JOIN_PUSHDOWN
+}
+```
 - 3.2. In the getCapabilities() method of JdbcConnector class, we have added this new capability. So that all Jdbc connectors will get this join pushdown capability. 
 ```
 @Override
