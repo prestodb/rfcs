@@ -232,15 +232,16 @@ For Join pushingdown we need to travers through the JoinNode. We are able to cre
 
 Below is the overall process that we have in GroupInnerJoinsByConnector optimizer
 
-After completing GroupInnerJoinsByConnector optimization we need to invoke predicate pushdown optimizer to recreate join criteria from the filter node of the JoinNode. The detailed implantation of GroupInnerJoinsByConnector optimizer is explained in below sessions. 
+After completing GroupInnerJoinsByConnector optimization, JdbcJoinPushdown Optimizer will be invoked. After that predicate pushdown optimizer is invoked to recreate join criteria from the filter node of the JoinNode. The detailed implementations of GroupInnerJoinsByConnector and JdbcJoinPushdown optimizers are explained in below sessions. 
 
-Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
-Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
-Use MultiJoinNode to group Jdbc Tables based on connector name 
-Build join relation for the grouped tables from all the join predicates
-Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
-Recreate left deep join node from the MultiJoinNode source list
-Build overall filter for the newly created join node
+GroupInnerJoinsByConnector in brief : 
+- Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
+- Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
+- Use MultiJoinNode to group Jdbc Tables based on connector name 
+- Build join relation for the grouped tables from all the join predicates
+- Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
+- Recreate left deep join node from the MultiJoinNode source list
+- Build overall filter for the newly created join node
 
 JdbcJoinPushdown Optimizer is added to the Logical Plan Optimizers Set of JdbcPlanOptimizerProvider.
 
