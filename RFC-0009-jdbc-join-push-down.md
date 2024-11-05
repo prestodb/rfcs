@@ -269,7 +269,7 @@ Expanding a bit on the above :
     - 3.3. Once it identifies the connector as pushdown supported, it creates a Map with key as connector name and value as a List of tables which are from the connector.
     - 3.4. This ensures that no other connector is affected by this optimiser. Only connectors with Join pushdown capability will be pushed down.
 4. Grouping tables for creating join query - based on JDBC datasource capability [link](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
-    - 4.1. The grouping of tables happens from the Map which is created above. [Point number 3.3]
+    - 4.1. JoinTables (List of ConnectorTableHandle) creation happens from the Map which is created above. [Point number 3.3]
     - 4.2. For each item in map, based on connector, we get a list of tables/nodes. Each node is then analysed for join pushdown capability and either added to JoinTables List or added back to rewrittenList (If it can not be pushed down).  
 5. If we are able to create a JoinTables list, then we create a single table scan for that and then add to the rewrittenList.
     - 5.1. i.e., if there are 4 tables in JoinTables list against Postgres, then we create a single table scan node with ConnectorHandleSet 
