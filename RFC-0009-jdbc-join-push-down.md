@@ -263,7 +263,7 @@ public Set<ConnectorCapabilities> getCapabilities()
 - 4.1. JoinTables (List of ConnectorTableHandle) creation happens from the Map which is created above. [Point number 3.3]
 - 4.2. For each item in map, based on connector, we get a list of tables/nodes. Each node is then analysed for join pushdown capability and either added to JoinTables List or added back to rewrittenList (If it can not be pushed down).
 #### 5. If we are able to create a JoinTables list, then we create a single table scan for that and then add to the rewrittenList.
-- 5.1. i.e., if there are 4 tables in JoinTables list against Postgres, then we create a single table scan node with ConnectorHandleSet 
+- 5.1. If there are 4 tables in JoinTables list against Postgres, then we create a single table scan node with ConnectorHandleSet 
 - 5.2. Inside the ConnectorHandleSet, these 4 tables will be there.
 - 5.3. This rewrittenList is used to create another multiJoinNode (rewrittenMultiJoinNode).
 #### 6. Create a joinNode for each sourceList
