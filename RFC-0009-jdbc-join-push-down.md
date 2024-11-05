@@ -623,11 +623,11 @@ On buildJoinSql(), we need to handle columns to be selected, the tables from whi
 
 #### 1. Handling Select columns
 
-The select column needs to resolve from the above input argument List<JdbcColumnHandle> columns
+The select column needs to resolve from the existing input argument List<JdbcColumnHandle> columns
 
 #### 2. Handling From tables.
 
-The parameter  ‘List<ConnectorTableHandle> joinTables’ that received on buildJoinSql() contains the tables in an order to join.  We could use this list of tables as from tables
+The parameter 'List<ConnectorTableHandle> joinTables' that is received on buildJoinSql() contains the tables in an order to join.  We can use this list of tables as from tables.
 
 #### 3. Handling JoinType
 
