@@ -278,7 +278,7 @@ public Set<ConnectorCapabilities> getCapabilities()
 }
 ```
 - 3.3. Once it identifies the connector as pushdown supported, it creates a Map with key as connector name and value as a List of tables which are from the connector.
-- 3.4. This ensures that no other connector is affected by this optimiser. Only connectors with Join pushdown capability will be pushed down.
+- 3.4. This ensures that no other connector is affected by this optimizer. Only connectors with Join pushdown capability will be pushed down.
 #### 4. Grouping tables for creating join query - based on JDBC datasource capability [link](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
 - 4.1. JoinTables (List of ConnectorTableHandle) creation happens from the Map which is created above. [Point number 3.3]
 - 4.2. For each item in map, based on connector, we get a list of tables/nodes. Each node is then analysed for join pushdown capability and either added to JoinTables List or added back to rewrittenList (If it can not be pushed down).
@@ -299,7 +299,8 @@ private PlanNode createLeftDeepJoinTree(MultiJoinNode multiJoinNode, PlanNodeIdA
 }
 ```
 
-#### 2. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
+In-depth details of the GroupInnerJoinsByConnector optimizer :
+#### 1. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
 
 In GroupInnerJoinsByConnector optimize method we need to invoke Rewriter to rewrite the plannode if it contains JoinNode. JoinNode rewrite is possible by overriding the visitJoin() method of SimplePlanRewriter.
 
@@ -351,7 +352,7 @@ public class GroupInnerJoinsByConnector
     
 }
 ```
-#### 3. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
+#### 2. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
 
 If a JoinNode satisfies all JdbcJoinPushdown requirement, then the very first step is to break the left deep tree structure of JoinNode and create a flattened structure called MultiJoinNode.
 
@@ -428,7 +429,7 @@ private void flattenNode(PlanNode resolved)
 
 Here the sources contain all the tables (irrespective of connector) of that JoinNode, filters contain all the predicate of that JoinNode. Now we have completed the flattening of JoinNode.
 
-#### 4. Use MultiJoinNode to group Jdbc Tables based on connector name 
+#### 3. Use MultiJoinNode to group Jdbc Tables based on connector name 
 
 At this point we have the MultiJoinNode data structure which holds all the tables, predicates, assignments and variables of the JoinNode hierarchy (presto PlanNode). 
 
@@ -469,7 +470,7 @@ join db2.table4 t4 on pg2.clmn1=t4.clmn
 ```
 Now we group table1 and table2 based on catalog pg. The table3 and table4 group based on catalog db2. But here db2 catalog tables does not have a join criteria within the db2 catalog tables and all join criteria relay on another pg catalog. And so we should not pushdown db2 tables and need to revert back from the grouped list. For that we could build join relation for the grouped tables from the predicates and if there is no valid join relation that table would be send back to source list by removing it from the grouping list.
 
-#### 5. Build join relation for the grouped tables from all the join predicates
+#### 4. Build join relation for the grouped tables from all the join predicates
 
 The MultiJoinNode already flattened the join criteria  and created the overall join predicate list called joinFilter. We are able to re-create the equality and inequality inference for joinFilter using existing presto EqualityInference methods.
 
@@ -481,7 +482,7 @@ Recreate join ‘on criteria’ aginst grouped table and remove tables which are
 
 Remove tables from groups if the tables ‘on criteria’ is not able to be processed by the connector.
 
-##### 5.1. Recreate join criteria for grouped tables
+##### 4.1. Recreate join criteria for grouped tables
 
  We could generate filterEqualityInference and inequalityPredicates from the overall Join filters using existing presto methods.
 
@@ -505,7 +506,7 @@ List<RowExpression> scopedInequalities = getExpressionsWithinVariableScope(inequ
 
 Now we have list of equiJoinFilters and inequalityPredicateSet. Then we need to remove tables which are not part of these predicates and part of the predicate which cannot be executed by the connector.
 
-##### 5.2. Remove tables from groups if the tables ‘on criteria’ is not able to be processed by the connector.
+##### 4.2. Remove tables from groups if the tables ‘on criteria’ is not able to be processed by the connector.
 
 After creating list of equality and inequality filters we are able to translate this predicate to JdbcExpression using existing JdbcFilterToSqlTranslator. Sample code is available on JdbcComputePushdown optimizer visitFilter(). Code snippet  from JdbcComputePushdown optimizer visitFilter() is as follows. We can reuse the code in JdbcTableHandle to check whether there is any JdbcExpression created or not. 
 
@@ -524,7 +525,7 @@ Optional<JdbcExpression> translated = jdbcExpression.getTranslated();
 
 Now we can remove all the tables from the group which have no join criteria and having join criteria which are not able to pushdown. The removed tables will be added in the rewrittenSources as explained on step5
 
-#### 6. Recreate left deep join node from the MultiJoinNode source list
+#### 5. Recreate left deep join node from the MultiJoinNode source list
 Now we have rewrittenSources list which contains new single TableScanNode (for grouped tables) and other normal TableScanNode which are not able to group. Using the rewrittenSources list we recreate MultiJoinNode. Using MultiJoinNode we are able to recreate LeftDeepJoinTree by following ReorderJoins Rule. Sample code is as follows :
 
 ```
@@ -555,7 +556,7 @@ private static PlanNode createJoin(int index, List<PlanNode> sources, PlanNodeId
 }
 ```
 
-#### 7. Build overall filter for the newly created join node
+#### 6. Build overall filter for the newly created join node
 While we create MultiJoinNode we separated all the FilterNodes by getting its predicate and adding the predicate to a set called filters. Again we flatten the join criteria against each join node and create a row expression called joinFilter. This is needed to create an overall predicate list. Using the overall predicate list we need to create a FilterNode on top of recreated left deep JoinNode. 
 
 ```
@@ -568,7 +569,7 @@ This FilterNode will pushdown to JoinNodes as its join criteria in later stage b
 
 ### JdbcJoinPushdown optimizer
 
-JoinPushdown Optimiser is implemented inside the presto-base-jdbc module. This optimiser is called after GroupInnerJoinsByConnector. 
+JoinPushdown Optimizer is implemented inside the presto-base-jdbc module. This optimizer is called after GroupInnerJoinsByConnector. 
 
 How is it invoked ? 
 - JdbcJoinPushdown Optimizer is added to the Logical Plan Optimizers Set of JdbcPlanOptimizerProvider.
