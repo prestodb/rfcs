@@ -224,15 +224,21 @@ Then it does a cross join with these two results. We will not do pushdown in thi
 
 For performing Jdbc JoinPushdown we required below implementations :
 
-### 1. GroupInnerJoinsByConnector optimizer
+For Join pushingdown we need to traverse through the JoinNode. The reason we need to traverse the JoinNode is that we need to identify whether the join query (that is created by presto before Pushdown Optimization is going to happen) is able to be processed by the datasource. For this we traverse all the nodes of the join node and validate all the 5 points [above](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
 
-#### 1.1. Create 2 Optimizers called GroupInnerJoinsByConnector and JdbcJoinPushdown
+We are going to create a new optimizer (GroupInnerJoinsByConnector) which implements PlanOptimizer and another optimizer (JdbcJoinPushdown) which implements ConnectorPlanOptimizer.
 
-For Join pushingdown we need to travers through the JoinNode. We are able to create a new optimizer (GroupInnerJoinsByConnector) which implements PlanOptimizer and another optimizer JdbcJoinPushdown which implements ConnectorPlanOptimizer.
-
-Below is the overall process that we have in GroupInnerJoinsByConnector optimizer
+The GroupInnerJoinsByConnector in presto-main module uses SimplePlanRewriter methods VisitJoin and VisitFilter to traverse through the nodes.  
 
 After completing GroupInnerJoinsByConnector optimization, JdbcJoinPushdown Optimizer will be invoked. After that predicate pushdown optimizer is invoked to recreate join criteria from the filter node of the JoinNode. The detailed implementations of GroupInnerJoinsByConnector and JdbcJoinPushdown optimizers are explained in below sessions. 
+
+JdbcJoinPushdown Optimizer is added to the Logical Plan Optimizers Set of JdbcPlanOptimizerProvider.
+
+Below is the overall process :
+
+### 1. GroupInnerJoinsByConnector optimizer
+
+#### 1.1. Create an Optimizers called GroupInnerJoinsByConnector
 
 GroupInnerJoinsByConnector in brief : 
 - Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
@@ -242,8 +248,6 @@ GroupInnerJoinsByConnector in brief :
 - Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
 - Recreate left deep join node from the MultiJoinNode source list
 - Build overall filter for the newly created join node
-
-JdbcJoinPushdown Optimizer is added to the Logical Plan Optimizers Set of JdbcPlanOptimizerProvider.
 
 #### 1.2. Load GroupInnerJoinsByConnector optimizer based on session flag
 
