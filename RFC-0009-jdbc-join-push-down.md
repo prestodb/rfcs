@@ -450,7 +450,7 @@ Set<PlanNode> rewrittenSources = new LinkedHashSet<>();
 
 
 for (PlanNode source : multiJoinNode.getSources()) {
-    Optional<String> connectorId = getJdbcConnectorId(source);
+    Optional<String> connectorId = getConnectorCapabilities(source);
     if (connectorId.isPresent()) {
         // This source can be combined with other 'sources' of the same connector to produce a single TableScanNode
         sourcesByConnector.computeIfAbsent(connectorId.get(), k -> new ArrayList<>());
