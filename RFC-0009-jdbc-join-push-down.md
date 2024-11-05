@@ -288,9 +288,9 @@ Expanding a bit on the above :
 
 #### 1.2. Load GroupInnerJoinsByConnector optimizer based on session flag
 
-GroupInnerJoinsByConnector optimizer need to load based on session flag ‘optimizer.inner-join-pushdown-enabled’. This flag should be configure in presto-main config.properties with default value as false.
+GroupInnerJoinsByConnector optimizer need to load based on session flag 'optimizer.inner-join-pushdown-enabled'. This flag should be configure in presto-main config.properties with default value as false.
 
-If the flag is set (‘optimizer-inner-join-pushdown-enabled=true’), then while starting presto GroupInnerJoinsByConnector optimizer should add to PlanOptimizers list. If it is not set  (‘optimizer-inner-join-pushdown-enabled=false’) the GroupInnerJoinsByConnector optimizer itself will not load to the application to perform JoinPushdown operation.
+If the flag is set ('optimizer-inner-join-pushdown-enabled=true'), then while starting presto GroupInnerJoinsByConnector optimizer should be added to PlanOptimizers list. If it is not set  ('optimizer-inner-join-pushdown-enabled=false') the GroupInnerJoinsByConnector optimizer itself will not load to the application to perform JoinPushdown operation.
 
 #### 1.3. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
 
@@ -632,15 +632,15 @@ There is no change expected but we may need to handle the assignment and alias.
 
 #### 5.1. Enable JdbcJoinPushdown at session level 
 
-We have a new session flag 'optimizer-inner-join-pushdown-enabled'. It can be configured in config.properties. 
+We have a new session flag 'optimizer.inner-join-pushdown-enabled'. It can be configured in config.properties. 
 eg:
-optimizer-inner-join-pushdown-enabled = true
+optimizer.inner-join-pushdown-enabled = true
 
 It can be from user session to override the above config.
 eg:
 SET SESSION optimizer_inner_join_pushdown_enabled = true
 
-If we do not set this flag (optimizer_inner_join_pushdown_enabled=false’) then no JoinPushdown should happen. 
+If we do not set this flag (optimizer_inner_join_pushdown_enabled = false’) then no JoinPushdown should happen. 
 
 ### 6. Predicate Pushdown
 
