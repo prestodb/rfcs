@@ -190,7 +190,9 @@ When we use some aggregate, math operations or datatype conversion along with jo
 | 3  | cast(varchar_20_column, varchar(100)) = varchar100_column       | `Select * from table a join table b on cast(a.varchar_20_column, varchar(100)) = b.varchar100_column;` 
 
 
-**2. Join operation should be an inner join and should have at least one column to join with another table.**
+**2. Join operation should be an INNER JOIN or a SELF JOIN.**
+
+A SELF JOIN is when a table is joined with itself.
 
 Note: Other optimizers in Presto may change the Join operation. We can call this as Inference. Sometimes presto will change a Pushdown capable Inner join to another Join operation incapable of pushdown (Eg: Infering to remove join condition/predicate in the plan). This will lead to pushdown capability being removed. And sometimes presto will change Join operation to a pushdown capable one. (Eg: Infering to create Inner join from Right/Left join)
 
@@ -227,7 +229,7 @@ Then it does a cross join with these two results. We will not do pushdown in thi
 
 **4. All tables from same connector will be grouped based on above specifications and pushed down to underlying datasource.**
 
-**5. Enable presto Join pushdown capabilities by setting the session flag enable-join-query-pushdown = true.**
+**5. Enable presto Join pushdown capabilities by setting the session flag optimizer_inner_join_pushdown_enabled = true.**
 
 ## Low level Design
 
