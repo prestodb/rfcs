@@ -240,22 +240,33 @@ Below is the overall process :
 
 ### 1. GroupInnerJoinsByConnector optimizer
 
-GroupInnerJoinsByConnector Optimiser is implemented inside the presto-main module
-
-#### 1.1. Create an Optimizer called GroupInnerJoinsByConnector
+GroupInnerJoinsByConnector Optimizer is implemented inside the presto-main module. This optimizer is used to group the tables (which are part of inner joins) in a query so that we can push down these grouped tables.
 
 GroupInnerJoinsByConnector in brief : 
 1. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
+       - The GroupInnerJoinsByConnector uses SimplePlanRewriter methods VisitJoin and VisitFilter to traverse through the nodes. The reason we need to traverse the JoinNode is that we need to identify whether the join query (that is created by presto before Pushdown Optimization is going to happen) is able to be processed by the datasource. For this we traverse all the nodes of the join node and validate all the 5 points [above](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
 2. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
-3. Use MultiJoinNode to group Jdbc Tables based on connector name 
-4. Build join relation for the grouped tables from all the join predicates
-5. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
-6. Recreate left deep join node from the MultiJoinNode source list
-7. Build overall filter for the newly created join node
+       -  Presto already has an existing data structure called multiJoinNode which is used to flatten Plan nodes into list of source nodes. We are using a similar approach to create multiJoinNode.
+3. Use MultiJoinNode to group Jdbc Tables based on connector name
+       - 3.1. We take each item of SourceList and check if it’s a connector which supports join push down. For this we have introduced a new capability in ConnectorCapabilities named "SUPPORTS_JOIN_PUSHDOWN”. 
+       - 3.2. In the getCapabilities() method of JdbcConnector class, we have added this new capability. So that all Jdbc connectors will get this join pushdown capability. 
+       ```
+       @Override
+       public Set<ConnectorCapabilities> getCapabilities()
+       {
+        return immutableEnumSet(NOT_NULL_COLUMN_CONSTRAINT, SUPPORTS_JOIN_PUSHDOWN);
+       }
+       ```
+       - 3.3. Once it identifies the connector as pushdown supported, it creates a Map with key as connector name and value as a List of tables which are from the connector.
+       - 3.4. This ensures that no other connector is affected by this optimiser. Only connectors with Join pushdown capability will be pushed down.
+6. Build join relation for the grouped tables from all the join predicates
+7. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
+8. Recreate left deep join node from the MultiJoinNode source list
+9. Build overall filter for the newly created join node
 
 Expanding a bit on the above : 
-1. The GroupInnerJoinsByConnector uses SimplePlanRewriter methods VisitJoin and VisitFilter to traverse through the nodes. The reason we need to traverse the JoinNode is that we need to identify whether the join query (that is created by presto before Pushdown Optimization is going to happen) is able to be processed by the datasource. For this we traverse all the nodes of the join node and validate all the 5 points [above](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
-2. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode. Presto already has an existing data structure called multiJoinNode which is used to flatten Plan nodes into list of source nodes. We are using a similar approach to create multiJoinNode.
+
+
 3. Grouping the SourceList of multiJoinNode based on jdbc connector. 
     - 3.1. We take each item of SourceList and check if it’s a connector which supports join push down. For this we have introduced a new capability in ConnectorCapabilities named "SUPPORTS_JOIN_PUSHDOWN”. 
     - 3.2. In the getCapabilities() method of JdbcConnector class, we have added this new capability. So that all Jdbc connectors will get this join pushdown capability. 
