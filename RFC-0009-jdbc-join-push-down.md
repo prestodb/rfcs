@@ -308,7 +308,7 @@ private PlanNode createLeftDeepJoinTree(MultiJoinNode multiJoinNode, PlanNodeIdA
 }
 ```
 
-In-depth details of the GroupInnerJoinsByConnector optimizer :
+#### In-depth details of the GroupInnerJoinsByConnector optimizer :
 #### 1. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
 
 In GroupInnerJoinsByConnector optimize method we need to invoke Rewriter to rewrite the plannode if it contains JoinNode. JoinNode rewrite is possible by overriding the visitJoin() method of SimplePlanRewriter.
