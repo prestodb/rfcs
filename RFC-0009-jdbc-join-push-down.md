@@ -243,11 +243,11 @@ Below is the overall process :
 GroupInnerJoinsByConnector Optimizer is implemented inside the presto-main module. This optimizer is used to group the tables (which are part of inner joins) in a query so that we can push down these grouped tables.
 
 GroupInnerJoinsByConnector in brief : 
-**1. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter**
+#### 1. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
 - 1.1. The GroupInnerJoinsByConnector uses SimplePlanRewriter methods VisitJoin and VisitFilter to traverse through the nodes. The reason we need to traverse the JoinNode is that we need to identify whether the join query (that is created by presto before Pushdown Optimization is going to happen) is able to be processed by the datasource. For this we traverse all the nodes of the join node and validate all the 5 points [above](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
-**2. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode**
+#### 2. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
 - 2.1. Presto already has an existing data structure called multiJoinNode which is used to flatten Plan nodes into list of source nodes. We are using a similar approach to create multiJoinNode.
-**3. Use MultiJoinNode to group Jdbc Tables based on connector name**
+#### 3. Use MultiJoinNode to group Jdbc Tables based on connector name
 - 3.1. We take each item of SourceList and check if it’s a connector which supports join push down. For this we have introduced a new capability in ConnectorCapabilities named "SUPPORTS_JOIN_PUSHDOWN”. 
 - 3.2. In the getCapabilities() method of JdbcConnector class, we have added this new capability. So that all Jdbc connectors will get this join pushdown capability. 
 ```
@@ -259,16 +259,16 @@ public Set<ConnectorCapabilities> getCapabilities()
 ```
 - 3.3. Once it identifies the connector as pushdown supported, it creates a Map with key as connector name and value as a List of tables which are from the connector.
 - 3.4. This ensures that no other connector is affected by this optimiser. Only connectors with Join pushdown capability will be pushed down.
-**4. Grouping tables for creating join query - based on JDBC datasource capability [link](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)**
+#### 4. Grouping tables for creating join query - based on JDBC datasource capability [link](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
 - 4.1. JoinTables (List of ConnectorTableHandle) creation happens from the Map which is created above. [Point number 3.3]
 - 4.2. For each item in map, based on connector, we get a list of tables/nodes. Each node is then analysed for join pushdown capability and either added to JoinTables List or added back to rewrittenList (If it can not be pushed down).
-**5. If we are able to create a JoinTables list, then we create a single table scan for that and then add to the rewrittenList.**
+#### 5. If we are able to create a JoinTables list, then we create a single table scan for that and then add to the rewrittenList.
 - 5.1. i.e., if there are 4 tables in JoinTables list against Postgres, then we create a single table scan node with ConnectorHandleSet 
 - 5.2. Inside the ConnectorHandleSet, these 4 tables will be there.
 - 5.3. This rewrittenList is used to create another multiJoinNode (rewrittenMultiJoinNode).
-**6. Create a joinNode for each sourceList**
+#### 6. Create a joinNode for each sourceList
 - 6.1. Iterate over the rewrittenMultiJoinNode, for each sourceList, call createLeftDeepJoinTree() method. This creates a joinNode with all the nodes in the sourceList.
-**7. A new FilterNode is created with the combinedFilters of the multiJoinNode as the predicate. This is finally returned.**
+#### 7. A new FilterNode is created with the combinedFilters of the multiJoinNode as the predicate. This is finally returned.
 ```
 private PlanNode createLeftDeepJoinTree(MultiJoinNode multiJoinNode, PlanNodeIdAllocator idAllocator)
 {
