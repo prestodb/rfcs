@@ -288,9 +288,9 @@ Expanding a bit on the above :
 
 #### 1.2. Load GroupInnerJoinsByConnector optimizer based on session flag
 
-GroupInnerJoinsByConnector optimizer need to load based on session flag ‘enable-join-query-pushdown’. This flag should be configure in presto-main config.properties with default value as false.
+GroupInnerJoinsByConnector optimizer need to load based on session flag ‘optimizer.inner-join-pushdown-enabled’. This flag should be configure in presto-main config.properties with default value as false.
 
-If the flag is set (‘enable-join-query-pushdown=true’), then while starting presto GroupInnerJoinsByConnector optimizer should add to PlanOptimizers list. If it is not set  (‘enable-join-query-pushdown=false’) the GroupInnerJoinsByConnector optimizer itself will not load to the application to perform JoinPushdown operation.
+If the flag is set (‘optimizer-inner-join-pushdown-enabled=true’), then while starting presto GroupInnerJoinsByConnector optimizer should add to PlanOptimizers list. If it is not set  (‘optimizer-inner-join-pushdown-enabled=false’) the GroupInnerJoinsByConnector optimizer itself will not load to the application to perform JoinPushdown operation.
 
 #### 1.3. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
 
@@ -630,13 +630,17 @@ There is no change expected but we may need to handle the assignment and alias.
 
 ### 5. Session flag
 
-#### 5.1. Enable JdbcJoinPushdown at connector level and session level 
+#### 5.1. Enable JdbcJoinPushdown at session level 
 
-There should have a mechanism to enable connector (catalog) level JoinPushdown capabilities. We need to bring a new flag on catalog.properties file (Eg: postgresql.properties) say enable_federated_join_pushdown.
+We have a new session flag 'optimizer-inner-join-pushdown-enabled'. It can be configured in config.properties. 
+eg:
+optimizer-inner-join-pushdown-enabled = true
 
-If we do not set this flag (‘enable_federated_join_pushdown=false’) then no JoinPushdown should happened for this catalog even though the session join pushdown flag is enabled (refer point 2 for the details of session join push down flag).
+It can be from user session to override the above config.
+eg:
+SET SESSION optimizer_inner_join_pushdown_enabled = true
 
-If we set this flag (‘enable_federated_join_pushdown=true’) then JoinPushdown should happened for this catalog only if the session join pushdown flag is enabled (refer point 2 for the details of session join push down flag).
+If we do not set this flag (optimizer_inner_join_pushdown_enabled=false’) then no JoinPushdown should happen. 
 
 ### 6. Predicate Pushdown
 
