@@ -259,43 +259,27 @@ GroupInnerJoinsByConnector in brief :
        ```
        - 3.3. Once it identifies the connector as pushdown supported, it creates a Map with key as connector name and value as a List of tables which are from the connector.
        - 3.4. This ensures that no other connector is affected by this optimiser. Only connectors with Join pushdown capability will be pushed down.
-6. Build join relation for the grouped tables from all the join predicates
-7. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
-8. Recreate left deep join node from the MultiJoinNode source list
-9. Build overall filter for the newly created join node
-
-Expanding a bit on the above : 
-
-
-3. Grouping the SourceList of multiJoinNode based on jdbc connector. 
-    - 3.1. We take each item of SourceList and check if it’s a connector which supports join push down. For this we have introduced a new capability in ConnectorCapabilities named "SUPPORTS_JOIN_PUSHDOWN”. 
-    - 3.2. In the getCapabilities() method of JdbcConnector class, we have added this new capability. So that all Jdbc connectors will get this join pushdown capability. 
-    ```
-    @Override
-    public Set<ConnectorCapabilities> getCapabilities()
-    {
-        return immutableEnumSet(NOT_NULL_COLUMN_CONSTRAINT, SUPPORTS_JOIN_PUSHDOWN);
-    }
-    ```
-    - 3.3. Once it identifies the connector as pushdown supported, it creates a Map with key as connector name and value as a List of tables which are from the connector.
-    - 3.4. This ensures that no other connector is affected by this optimiser. Only connectors with Join pushdown capability will be pushed down.
 4. Grouping tables for creating join query - based on JDBC datasource capability [link](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
-    - 4.1. JoinTables (List of ConnectorTableHandle) creation happens from the Map which is created above. [Point number 3.3]
-    - 4.2. For each item in map, based on connector, we get a list of tables/nodes. Each node is then analysed for join pushdown capability and either added to JoinTables List or added back to rewrittenList (If it can not be pushed down).  
+       - 4.1. JoinTables (List of ConnectorTableHandle) creation happens from the Map which is created above. [Point number 3.3]
+       - 4.2. For each item in map, based on connector, we get a list of tables/nodes. Each node is then analysed for join pushdown capability and either added to JoinTables List or added back to rewrittenList (If it can not be pushed down).
 5. If we are able to create a JoinTables list, then we create a single table scan for that and then add to the rewrittenList.
-    - 5.1. i.e., if there are 4 tables in JoinTables list against Postgres, then we create a single table scan node with ConnectorHandleSet 
-    - 5.2. Inside the ConnectorHandleSet, these 4 tables will be there.
-    - 5.3. This rewrittenList is used to create another multiJoinNode (rewrittenMultiJoinNode).
+       - 5.1. i.e., if there are 4 tables in JoinTables list against Postgres, then we create a single table scan node with ConnectorHandleSet 
+       - 5.2. Inside the ConnectorHandleSet, these 4 tables will be there.
+       - 5.3. This rewrittenList is used to create another multiJoinNode (rewrittenMultiJoinNode).
 6. Iterate over the rewrittenMultiJoinNode, for each sourceList, call createLeftDeepJoinTree() method. This creates a joinNode with all the nodes in the sourceList.
 7. A new FilterNode is created with the combinedFilters of the multiJoinNode as the predicate. This is finally returned.
-    ```
-    private PlanNode createLeftDeepJoinTree(MultiJoinNode multiJoinNode, PlanNodeIdAllocator idAllocator)
-    {
+       ```
+       private PlanNode createLeftDeepJoinTree(MultiJoinNode multiJoinNode, PlanNodeIdAllocator idAllocator)
+       {
         PlanNode joinNode = createJoin(0, ImmutableList.copyOf(multiJoinNode.getSources()), idAllocator);
         RowExpression combinedFilters = and(multiJoinNode.getJoinFilter(), multiJoinNode.getFilter());
         return new FilterNode(Optional.empty(), idAllocator.getNextId(), joinNode, combinedFilters);
-    }
-    ```
+       }
+       ```
+8. Build join relation for the grouped tables from all the join predicates.
+9. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
+10. Recreate left deep join node from the MultiJoinNode source list
+11. Build overall filter for the newly created join node
 
 #### 1.3. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
 
