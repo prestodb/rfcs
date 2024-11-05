@@ -578,7 +578,7 @@ This FilterNode will pushdown to JoinNodes as its join criteria in later stage b
 
 ### JdbcJoinPushdown optimizer
 
-JoinPushdown Optimizer is implemented inside the presto-base-jdbc module. This optimizer is called after GroupInnerJoinsByConnector. It is used to convert ConnectorTableHandleSet to List of ConnectorTableHandle which is able to be understood by JdbcTableHandle.
+JoinPushdown Optimizer is implemented inside the presto-base-jdbc module. This optimizer is called after GroupInnerJoinsByConnector. It is used to convert ConnectorTableHandleSet to List of ConnectorTableHandles which is able to be understood by JdbcTableHandle.
 
 - JdbcJoinPushdown Optimizer is added as Logical Plan Optimizer in JdbcPlanOptimizerProvider.
 ```
@@ -588,18 +588,16 @@ public Set<ConnectorPlanOptimizer> getLogicalPlanOptimizers()
  return ImmutableSet.of(new JdbcJoinPushdown());
 }
 ```
-- When this optimizer is called, it hits the optimize() method in the class. Inside that ConnectorPlanRewriter class calls it’s own override visitTableScan() method.
+- When the logical optimization of Jdbc connector happens, it invokes JdbcJoinPushdown optimizer visitTableScan() to rewrite ConnectorTableHandleSet to List of ConnectorTableHandles
 
 Inside the visitTableScan() :
-- We check if connectorHanlde of tableHandle is an instance of ConnectorTableHandleSet
+- We check if connectorHandle of tableHandle is an instance of ConnectorTableHandleSet
 - If that is the case, make a new JdbcTableHandle with joinTables as the tableHandles.getConnectorTableHandles()
 - If not, return the node.
 
 ![JdbcJoinPushdown optimizer](RFC-0009-jdbc-join-push-down/After_JdbcJoinPushdown.png)
 
-In JdbcJoinPushdown we override visitTableScan() from ConnectorPlanOptimizer to create a new newTableHandle and new TableScanNode with the combined details in JDBC level. 
-
-#### 2.1. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
+#### 1. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
 
 Create a TableScanNode structure which is able to hold all the jdbc table which is grouped as part of above implementation. Below is the proposed structure for the new TableScanNode
 
