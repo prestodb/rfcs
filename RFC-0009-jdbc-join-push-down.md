@@ -661,11 +661,12 @@ SET SESSION optimizer_inner_join_pushdown_enabled = true
 ```
 If we do not set this flag or set it to false (SET SESSION optimizer_inner_join_pushdown_enabled = false’) then Join Pushdown will not happen. 
 
-#### 2. Load GroupInnerJoinsByConnector optimizer based on session flag
+#### 2. Invoke GroupInnerJoinsByConnector optimizer based on session flag
 
-GroupInnerJoinsByConnector optimizer will be loaded based on session flag 'optimizer.inner-join-pushdown-enabled'. 
+GroupInnerJoinsByConnector optimizer will be invoked based on session flag 'optimizer.inner-join-pushdown-enabled'. 
 
-If the flag is set ('optimizer-inner-join-pushdown-enabled=true'), then while starting presto GroupInnerJoinsByConnector optimizer will be added to PlanOptimizers list. If it is not set ('optimizer-inner-join-pushdown-enabled=false' or the flag is not set) the GroupInnerJoinsByConnector optimizer itself will not load to the application to perform JoinPushdown operation.
+If the flag is set ('optimizer-inner-join-pushdown-enabled=true'), then it's optimize method will be invoked.
+If it is not set ('optimizer-inner-join-pushdown-enabled=false' or the flag is not set) then it's optimize method will not be invoked.
 
 ## Predicate Pushdown
 
