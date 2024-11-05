@@ -578,10 +578,16 @@ This FilterNode will pushdown to JoinNodes as its join criteria in later stage b
 
 ### JdbcJoinPushdown optimizer
 
-JoinPushdown Optimizer is implemented inside the presto-base-jdbc module. This optimizer is called after GroupInnerJoinsByConnector. 
+JoinPushdown Optimizer is implemented inside the presto-base-jdbc module. This optimizer is called after GroupInnerJoinsByConnector. It is used to convert ConnectorTableHandleSet to List of ConnectorTableHandle which is able to be understood by JdbcTableHandle.
 
-How is it invoked ? 
-- JdbcJoinPushdown Optimizer is added to the Logical Plan Optimizers Set of JdbcPlanOptimizerProvider.
+- JdbcJoinPushdown Optimizer is added as Logical Plan Optimizer in JdbcPlanOptimizerProvider.
+```
+@Override
+public Set<ConnectorPlanOptimizer> getLogicalPlanOptimizers()
+{
+ return ImmutableSet.of(new JdbcJoinPushdown());
+}
+```
 - When this optimizer is called, it hits the optimize() method in the class. Inside that ConnectorPlanRewriter class calls it’s own override visitTableScan() method.
 
 Inside the visitTableScan() :
