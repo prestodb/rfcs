@@ -224,11 +224,7 @@ Then it does a cross join with these two results. We will not do pushdown in thi
 
 For performing Jdbc JoinPushdown we required below implementations :
 
-For Join pushingdown we need to traverse through the JoinNode. The reason we need to traverse the JoinNode is that we need to identify whether the join query (that is created by presto before Pushdown Optimization is going to happen) is able to be processed by the datasource. For this we traverse all the nodes of the join node and validate all the 5 points [above](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
-
 We are going to create a new optimizer (GroupInnerJoinsByConnector) which implements PlanOptimizer and another optimizer (JdbcJoinPushdown) which implements ConnectorPlanOptimizer.
-
-The GroupInnerJoinsByConnector in presto-main module uses SimplePlanRewriter methods VisitJoin and VisitFilter to traverse through the nodes.  
 
 After completing GroupInnerJoinsByConnector optimization, JdbcJoinPushdown Optimizer will be invoked. After that predicate pushdown optimizer is invoked to recreate join criteria from the filter node of the JoinNode. The detailed implementations of GroupInnerJoinsByConnector and JdbcJoinPushdown optimizers are explained in below sessions. 
 
@@ -241,13 +237,46 @@ Below is the overall process :
 #### 1.1. Create an Optimizers called GroupInnerJoinsByConnector
 
 GroupInnerJoinsByConnector in brief : 
-- Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
-- Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
-- Use MultiJoinNode to group Jdbc Tables based on connector name 
-- Build join relation for the grouped tables from all the join predicates
-- Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
-- Recreate left deep join node from the MultiJoinNode source list
-- Build overall filter for the newly created join node
+1. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
+2. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
+3. Use MultiJoinNode to group Jdbc Tables based on connector name 
+4. Build join relation for the grouped tables from all the join predicates
+5. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
+6. Recreate left deep join node from the MultiJoinNode source list
+7. Build overall filter for the newly created join node
+
+Expanding a bit on the above : 
+1. The GroupInnerJoinsByConnector uses SimplePlanRewriter methods VisitJoin and VisitFilter to traverse through the nodes. The reason we need to traverse the JoinNode is that we need to identify whether the join query (that is created by presto before Pushdown Optimization is going to happen) is able to be processed by the datasource. For this we traverse all the nodes of the join node and validate all the 5 points [above](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
+2. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode. Presto already has an existing data structure called multiJoinNode which is used to flatten Plan nodes into list of source nodes. We are using a similar approach to create multiJoinNode.
+3. Grouping the SourceList of multiJoinNode based on jdbc connector. 
+    3.1. We take each item of SourceList and check if it’s a connector which supports join push down. For this we have introduced a new capability in ConnectorCapabilities named "SUPPORTS_JOIN_PUSHDOWN”. 
+    3.2. In the getCapabilities() method of JdbcConnector class, we have added this new capability. So that all Jdbc connectors will get this join pushdown capability. 
+    ```
+    @Override
+    public Set<ConnectorCapabilities> getCapabilities()
+    {
+        return immutableEnumSet(NOT_NULL_COLUMN_CONSTRAINT, SUPPORTS_JOIN_PUSHDOWN);
+    }
+    ```
+    3.3. Once it identifies the connector as pushdown supported, it creates a Map with key as connector name and value as a List of tables which are from the connector.
+    3.4. This ensures that no other connector is affected by this optimiser. Only connectors with Join pushdown capability will be pushed down.
+4. Grouping tables for creating join query - based on JDBC datasource capability [link](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
+    4.1. The grouping of tables happens from the Map which is created above. [Point number 3.3]
+    4.2. For each item in map, based on connector, we get a list of tables/nodes. Each node is then analysed for join pushdown capability and either added to JoinTables List or added back to rewrittenList (If it can not be pushed down).  
+5. If we are able to create a JoinTables list, then we create a single table scan for that and then add to the rewrittenList.
+    5.1. i.e., if there are 4 tables in JoinTables list against Postgres, then we create a single table scan node with ConnectorHandleSet 
+    5.2. Inside the ConnectorHandleSet, these 4 tables will be there.
+    5.3. This rewrittenList is used to create another multiJoinNode (rewrittenMultiJoinNode).
+6. Iterate over the rewrittenMultiJoinNode, for each sourceList, call createLeftDeepJoinTree() method. This creates a joinNode with all the nodes in the sourceList.
+7. A new FilterNode is created with the combinedFilters of the multiJoinNode as the predicate. This is finally returned.
+    ```
+    private PlanNode createLeftDeepJoinTree(MultiJoinNode multiJoinNode, PlanNodeIdAllocator idAllocator)
+    {
+        PlanNode joinNode = createJoin(0, ImmutableList.copyOf(multiJoinNode.getSources()), idAllocator);
+        RowExpression combinedFilters = and(multiJoinNode.getJoinFilter(), multiJoinNode.getFilter());
+        return new FilterNode(Optional.empty(), idAllocator.getNextId(), joinNode, combinedFilters);
+    }
+    ```
 
 #### 1.2. Load GroupInnerJoinsByConnector optimizer based on session flag
 
