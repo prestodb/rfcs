@@ -442,7 +442,7 @@ Here the sources contain all the tables (irrespective of connector) of that Join
 
 At this point we have the MultiJoinNode data structure which holds all the tables, predicates, assignments and variables of the JoinNode hierarchy (presto PlanNode). 
 
-Now we need to group the tables based on connector name. For this we will iterate the source list of MultiJoinNode and get TableScanNodes. If the ConnectorTableHandle of TableScanNodes is JdbcTableHandle then we put that TableScanNode in a map with key as its catalog name. So for the same catalog name we have a list of TableScanNode. If ConnectorTableHandle is not a JdbcTableHandle then we add that TableScanNode to rewrittenSources list without performing any grouping. 
+Now we need to group the tables based on connector name. For this we will iterate the source list of MultiJoinNode and get TableScanNodes. If the connector have the pushdown capability (SUPPORTS_JOIN_PUSHDOWN) then we put that TableScanNode in a map with key as its catalog name. So for the same catalog name we have a list of TableScanNodes. If the connector is not having the pushdown capability (SUPPORTS_JOIN_PUSHDOWN) then we add that TableScanNode to rewrittenSources list without performing any grouping. 
 
 ```
 Map<String, List<PlanNode>> sourcesByConnector = new HashMap<>();
