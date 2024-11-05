@@ -597,15 +597,11 @@ Inside the visitTableScan() :
 
 ![JdbcJoinPushdown optimizer](RFC-0009-jdbc-join-push-down/After_JdbcJoinPushdown.png)
 
-#### 1. Create Single TableScanNode for grouped tables and add as MultiJoinNode source list
-
-Create a TableScanNode structure which is able to hold all the jdbc table which is grouped as part of above implementation. Below is the proposed structure for the new TableScanNode
+JdbcJoinPushdown optimizer will create a TableScanNode structure which is able to hold all the jdbc tables which are grouped as part of above implementation. Below is the proposed structure for the new TableScanNode
 
 ![Image 2](RFC-0009-jdbc-join-push-down/in-depth-design-image-2.png)
 
 ![Image 3](RFC-0009-jdbc-join-push-down/in-depth-design-image-3.png)
-
-Here we are able to iterate through grouped list against a connector and able to create JoinTables for each TableScanNode. Using this list of JoinTables we are creating a single TableScanNode for that connector. This Single table scan node is added to the rewrittenSources list to create MultiJoinNode source. 
 
 ### Changes required in JdbcSplit
 
