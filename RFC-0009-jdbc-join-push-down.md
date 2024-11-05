@@ -222,11 +222,11 @@ Then it does a cross join with these two results. We will not do pushdown in thi
 
 ## Low level Design
 
-For performing Jdbc JoinPushdown we required below implementations :
+As part of for performing JDBC Join pushdown, we need to introduce 2 new optimizers and then need to use the existing Predicate pushdown optimizer and JDBC Compute Pushdown Optimizer.
 
 We are going to create a new optimizer (GroupInnerJoinsByConnector) which implements PlanOptimizer and another optimizer (JdbcJoinPushdown) which implements ConnectorPlanOptimizer.
 
-After completing GroupInnerJoinsByConnector optimization, JdbcJoinPushdown Optimizer will be invoked. After that predicate pushdown optimizer is invoked to recreate join criteria from the filter node of the JoinNode. The detailed implementations of GroupInnerJoinsByConnector and JdbcJoinPushdown optimizers are explained in below sessions. 
+After completing GroupInnerJoinsByConnector optimization, JdbcJoinPushdown Optimizer will be invoked. After that predicate pushdown optimizer is invoked to recreate join criteria from the filter node of the JoinNode.
 
 Below is the overall process :
 1. Run GroupInnerJoinsByConnector Optimizer (new)
