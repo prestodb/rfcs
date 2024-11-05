@@ -249,7 +249,7 @@ Below is the overall process :
 7. Query Builder checks if pushdown is happening and builds join query accordingly.
 8. The built join query is passed to BaseJdbcClient for execution.
 
-### GroupInnerJoinsByConnector optimizer
+## GroupInnerJoinsByConnector optimizer
 
 GroupInnerJoinsByConnector Optimizer is implemented inside the presto-main module. This optimizer is used to group the tables (which are part of inner joins) in a query so that we can push down these grouped tables.
 
@@ -308,7 +308,7 @@ private PlanNode createLeftDeepJoinTree(MultiJoinNode multiJoinNode, PlanNodeIdA
 }
 ```
 
-#### In-depth details of the GroupInnerJoinsByConnector optimizer :
+## In-depth details of the GroupInnerJoinsByConnector optimizer :
 #### 1. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
 
 In GroupInnerJoinsByConnector optimize method we need to invoke Rewriter to rewrite the plannode if it contains JoinNode. JoinNode rewrite is possible by overriding the visitJoin() method of SimplePlanRewriter.
