@@ -257,8 +257,8 @@ Expanding a bit on the above :
 1. The GroupInnerJoinsByConnector uses SimplePlanRewriter methods VisitJoin and VisitFilter to traverse through the nodes. The reason we need to traverse the JoinNode is that we need to identify whether the join query (that is created by presto before Pushdown Optimization is going to happen) is able to be processed by the datasource. For this we traverse all the nodes of the join node and validate all the 5 points [above](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
 2. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode. Presto already has an existing data structure called multiJoinNode which is used to flatten Plan nodes into list of source nodes. We are using a similar approach to create multiJoinNode.
 3. Grouping the SourceList of multiJoinNode based on jdbc connector. 
-    3.1. We take each item of SourceList and check if it’s a connector which supports join push down. For this we have introduced a new capability in ConnectorCapabilities named "SUPPORTS_JOIN_PUSHDOWN”. 
-    3.2. In the getCapabilities() method of JdbcConnector class, we have added this new capability. So that all Jdbc connectors will get this join pushdown capability. 
+    - 3.1. We take each item of SourceList and check if it’s a connector which supports join push down. For this we have introduced a new capability in ConnectorCapabilities named "SUPPORTS_JOIN_PUSHDOWN”. 
+    - 3.2. In the getCapabilities() method of JdbcConnector class, we have added this new capability. So that all Jdbc connectors will get this join pushdown capability. 
     ```
     @Override
     public Set<ConnectorCapabilities> getCapabilities()
@@ -266,8 +266,8 @@ Expanding a bit on the above :
         return immutableEnumSet(NOT_NULL_COLUMN_CONSTRAINT, SUPPORTS_JOIN_PUSHDOWN);
     }
     ```
-    3.3. Once it identifies the connector as pushdown supported, it creates a Map with key as connector name and value as a List of tables which are from the connector.
-    3.4. This ensures that no other connector is affected by this optimiser. Only connectors with Join pushdown capability will be pushed down.
+    - 3.3. Once it identifies the connector as pushdown supported, it creates a Map with key as connector name and value as a List of tables which are from the connector.
+    - 3.4. This ensures that no other connector is affected by this optimiser. Only connectors with Join pushdown capability will be pushed down.
 4. Grouping tables for creating join query - based on JDBC datasource capability [link](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
     4.1. The grouping of tables happens from the Map which is created above. [Point number 3.3]
     4.2. For each item in map, based on connector, we get a list of tables/nodes. Each node is then analysed for join pushdown capability and either added to JoinTables List or added back to rewrittenList (If it can not be pushed down).  
