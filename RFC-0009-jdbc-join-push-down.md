@@ -588,7 +588,7 @@ If we set this flag (‘enable_federated_join_pushdown=true’) then JoinPushdow
 ### 6. Predicate Pushdown
 
 #### 6.1. Pushdown the overall filter to the newly created TableScanNode.
-After creating Single TableScanNode for grouped tables (refer point 7) we need to pushdown the FilterNode on connector level for the applicable filter and maintain the FilterNode for presto if it is not able to pushdown. For this there is no code change and it should work as part of point 9 activities.
+After creating Single TableScanNode for grouped tables (refer point 7) we need to pushdown the FilterNode on connector level for the applicable filter and maintain the FilterNode for presto if it is not able to pushdown. For this there is no code change required.
 
 ## [Optional] Metrics
 
