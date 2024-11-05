@@ -576,7 +576,7 @@ return new FilterNode(Optional.empty(), idAllocator.getNextId(), joinNode, combi
 ```
 This FilterNode will pushdown to JoinNodes as its join criteria in later stage by the existing optimizers called PredicatePushdown Optimizer.
 
-### JdbcJoinPushdown optimizer
+## JdbcJoinPushdown optimizer
 
 JoinPushdown Optimizer is implemented inside the presto-base-jdbc module. This optimizer is called after GroupInnerJoinsByConnector. It is used to convert ConnectorTableHandleSet to List of ConnectorTableHandles which is able to be understood by JdbcTableHandle.
 
@@ -603,7 +603,7 @@ JdbcJoinPushdown optimizer will create a TableScanNode structure which is able t
 
 ![Image 3](RFC-0009-jdbc-join-push-down/in-depth-design-image-3.png)
 
-### Changes required in JdbcSplit
+## Changes required in JdbcSplit
 
 We have added a new feild called joinTables in JdbcSplit.java
 
@@ -613,7 +613,7 @@ private final Optional<List<ConnectorTableHandle>> joinTables;
 
 This means we will also require some changes in buildSql() and getSplits() of BaseJdbcClientj.java to pass the new feild to QueryBuilder.java
 
-### Create Join Query in QueryBuilder
+## Create Join Query in QueryBuilder
 
 At present we are focusing on common operators =, <, >, <=, >= and !=  with common datatype like int, bigint, float, real, string, varchar, char. So there is no connector level implementation required and focusing on single implementation for all supported Jdbc connector through QueryBuilder class.
 
@@ -645,7 +645,7 @@ The select column name and join criteria may be available as an expression and s
 
 There is no change expected but we may need to handle the assignment and alias.
 
-### Session flag
+## Session flag
 
 #### 1. Enable JdbcJoinPushdown at session level 
 
@@ -667,7 +667,7 @@ GroupInnerJoinsByConnector optimizer will be loaded based on session flag 'optim
 
 If the flag is set ('optimizer-inner-join-pushdown-enabled=true'), then while starting presto GroupInnerJoinsByConnector optimizer will be added to PlanOptimizers list. If it is not set ('optimizer-inner-join-pushdown-enabled=false' or the flag is not set) the GroupInnerJoinsByConnector optimizer itself will not load to the application to perform JoinPushdown operation.
 
-### Predicate Pushdown
+## Predicate Pushdown
 
 #### 1. Pushdown the overall filter to the newly created TableScanNode.
 After creating Single TableScanNode for grouped tables (refer point 7) we need to pushdown the FilterNode on connector level for the applicable filter and maintain the FilterNode for presto if it is not able to pushdown. For this there is no code change required.
