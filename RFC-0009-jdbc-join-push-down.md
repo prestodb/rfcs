@@ -286,12 +286,6 @@ Expanding a bit on the above :
     }
     ```
 
-#### 1.2. Load GroupInnerJoinsByConnector optimizer based on session flag
-
-GroupInnerJoinsByConnector optimizer need to load based on session flag 'optimizer.inner-join-pushdown-enabled'. This flag should be configure in presto-main config.properties with default value as false.
-
-If the flag is set ('optimizer-inner-join-pushdown-enabled=true'), then while starting presto GroupInnerJoinsByConnector optimizer should be added to PlanOptimizers list. If it is not set  ('optimizer-inner-join-pushdown-enabled=false') the GroupInnerJoinsByConnector optimizer itself will not load to the application to perform JoinPushdown operation.
-
 #### 1.3. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
 
 In GroupInnerJoinsByConnector optimize method we need to invoke Rewriter to rewrite the plannode if it contains JoinNode. JoinNode rewrite is possible by overriding the visitJoin() method of SimplePlanRewriter.
@@ -632,15 +626,23 @@ There is no change expected but we may need to handle the assignment and alias.
 
 #### 5.1. Enable JdbcJoinPushdown at session level 
 
-We have a new session flag 'optimizer.inner-join-pushdown-enabled'. It can be configured in config.properties. 
+We have a new session flag 'optimizer.inner-join-pushdown-enabled'. This flag should be configured in presto-main config.properties with default value as false.
 eg:
+```
 optimizer.inner-join-pushdown-enabled = true
-
-It can be from user session to override the above config.
+```
+It can be set from user session to override the above config.
 eg:
+```
 SET SESSION optimizer_inner_join_pushdown_enabled = true
+```
+If we do not set this flag or set it to false (SET SESSION optimizer_inner_join_pushdown_enabled = false’) then Join Pushdown will not happen. 
 
-If we do not set this flag (optimizer_inner_join_pushdown_enabled = false’) then no JoinPushdown should happen. 
+#### 5.2. Load GroupInnerJoinsByConnector optimizer based on session flag
+
+GroupInnerJoinsByConnector optimizer will be loaded based on session flag 'optimizer.inner-join-pushdown-enabled'. 
+
+If the flag is set ('optimizer-inner-join-pushdown-enabled=true'), then while starting presto GroupInnerJoinsByConnector optimizer will be added to PlanOptimizers list. If it is not set ('optimizer-inner-join-pushdown-enabled=false' or the flag is not set) the GroupInnerJoinsByConnector optimizer itself will not load to the application to perform JoinPushdown operation.
 
 ### 6. Predicate Pushdown
 
