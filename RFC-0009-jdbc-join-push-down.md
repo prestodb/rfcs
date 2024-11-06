@@ -318,7 +318,7 @@ private PlanNode createLeftDeepJoinTree(MultiJoinNode multiJoinNode, PlanNodeIdA
 
 In GroupInnerJoinsByConnector optimize method we need to invoke Rewriter to rewrite the plannode if it contains JoinNode. JoinNode rewrite is possible by overriding the visitJoin() method of SimplePlanRewriter.
 
-In visitJoin() we should have method to validate JdbcJoinPushdown Conditions that is explained in the document. If the JoinNode satisfies the JdbcJoinPushdown Conditions we should pushdown the Join by creating a single table scan node for that Join. 
+In visitJoin() we should have method to validate JdbcJoinPushdown Conditions that is explained [here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource). If the JoinNode satisfies the JdbcJoinPushdown Conditions we should pushdown the Join by creating a single table scan node for that Join. 
 
 JoinPushdown should happen for InnerJoin. No other Joins like LEFT JOIN, RIGHT JOIN, OUTER JOIN, CROSS JOIN, etc should be pushed down.
 
