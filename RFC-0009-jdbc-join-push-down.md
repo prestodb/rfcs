@@ -152,7 +152,7 @@ For performing this jdbc join pushdown,  we need to create two logical optimizer
 
 GroupInnerJoinsByConnector optimizer is a PlanOptimizer which is responsible for flattening the JoinNode and adding the sundered nodes to a data structure called MultiJoinNode. 
 
-GroupInnerJoinsByConnector optimizer will work on MultiJoinNode and will group TableScanNodes based on connector name if the connector supports join pushdown. This optimizer will create a single TableScanNode by using a new data structure called ConnectorTableHandleSet from the grouped TableScanNode. ConnectorTableHandleSet is a set of ConnectorTableHandles which is generated from grouped TableScanNode. This optimizer also creates a combined overall predicate and overall assignments for the ConnectorTableHandleSet and will add these to the newly created TableScanNode. This newly created TableScanNode structure will replace the source list of MultiJoinNode.
+GroupInnerJoinsByConnector optimizer will work on MultiJoinNode and will group TableScanNodes based on connector name if the connector supports join pushdown. This optimizer will create a single TableScanNode by using a new data structure called JoinTableSet from the grouped TableScanNode. JoinTableSet is a set of ConnectorTableHandles which is generated from grouped TableScanNode. This optimizer also creates a combined overall predicate and overall assignments for the JoinTableSet and will add these to the newly created TableScanNode. This newly created TableScanNode structure will replace the source list of MultiJoinNode.
 GroupInnerJoinsByConnector optimizer will then work on re-creating join node with updated MultiJoinNode structure. The low level design is available [here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#groupinnerjoinsbyconnector-optimizer)
 
 Sql Query : 
@@ -581,7 +581,7 @@ This FilterNode will pushdown to JoinNodes as its join criteria in later stage b
 
 ## JdbcJoinPushdown optimizer
 
-JoinPushdown Optimizer is implemented inside the presto-base-jdbc module. This optimizer is called after GroupInnerJoinsByConnector. It is used to convert ConnectorTableHandleSet to List of ConnectorTableHandles which is able to be understood by JdbcTableHandle.
+JoinPushdown Optimizer is implemented inside the presto-base-jdbc module. This optimizer is called after GroupInnerJoinsByConnector. It is used to convert JoinTableSet to List of ConnectorTableHandles which is able to be understood by JdbcTableHandle.
 
 - JdbcJoinPushdown Optimizer is added as Logical Plan Optimizer in JdbcPlanOptimizerProvider.
 ```
@@ -591,10 +591,10 @@ public Set<ConnectorPlanOptimizer> getLogicalPlanOptimizers()
  return ImmutableSet.of(new JdbcJoinPushdown());
 }
 ```
-- When the logical optimization of Jdbc connector happens, it invokes JdbcJoinPushdown optimizer visitTableScan() to rewrite ConnectorTableHandleSet to List of ConnectorTableHandles
+- When the logical optimization of Jdbc connector happens, it invokes JdbcJoinPushdown optimizer visitTableScan() to rewrite JoinTableSet to List of ConnectorTableHandles
 
 Inside the visitTableScan() :
-- We check if connectorHandle of tableHandle is an instance of ConnectorTableHandleSet
+- We check if connectorHandle of tableHandle is an instance of JoinTableSet
 - If that is the case, make a new JdbcTableHandle with joinTables as the tableHandles.getConnectorTableHandles()
 - If not, return the node.
 
@@ -668,12 +668,28 @@ This creates a problem in pushPredicateIntoTableScan method in PickTableLayout c
 This assumption by presto is done on the basis that till now all queries done by presto to any database is as a select from a single table.
 
 #### Proposed Solution :
-We can add a field 'table_alias' (table alias) to JdbcTableHandle. This is not the table alias that the user passes in his query.
-This alias can then be used inside JdbcColumnHandle to unique identify columns and assignments
+
+We can bring in a 'table alias' to uniquely identify the tables. This is not the table alias that the user passes in his query.
+This alias can then be used to unique identify columns and assignments even in the case of self joins.
 This alias can then also be used in the Join conditions, predicates, filters, etc.. which will simplify the Pushdown Query that we create in Query Builder.
 This solved the issue and we were able to push down self joins as well.
 
-We are currently setting this table_alias value as a randomised string in BaseJdbcClient. This is not a right implementation and we are planning to set it inside the JdbcJoinPushdown optimizer. 
+Addition of JoinTableInfo Class:
+A new class, JoinTableInfo, has been introduced to encapsulate essential information for each join table. This includes:
+- A tableHandle representing the table.
+- Corresponding assignments to specify how columns are mapped.
+- Output variables associated with the table.
+
+Storing JoinTableInfo in JoinTableSet:
+- Within the GroupInnerJoinsByConnector, we gather a set of JoinTableInfo objects, each representing one of the join tables.
+- This set is stored in the JoinTableSet, which is an implementation of ConnectorTableHandle.
+
+Iterating JoinTableInfo in JdbcJoinPushdown:
+- The JdbcJoinPushdown optimizer then iterates through the JoinTableInfo objects in the set.
+- During this iteration, an alias is applied to each JdbcTableHandle and JdbcColumnHandle objects within assignments.
+
+Creating the New TableScanNode:
+- The updated list of ConnectorTableHandle and updated assignments are then used to construct the new TableScanNode
 
 ## Changes required in JdbcSplit
 
@@ -717,7 +733,7 @@ The select column name and join criteria may be available as an expression and s
 
 There is no change expected but we may need to handle the assignment and alias.
 
-## Session flag
+## Session flags
 
 #### 1. Enable JdbcJoinPushdown at session level 
 
@@ -739,6 +755,22 @@ GroupInnerJoinsByConnector optimizer will be invoked based on session flag 'opti
 
 If the flag is set ('optimizer-inner-join-pushdown-enabled=true'), then it's optimize method will be invoked.
 If it is not set ('optimizer-inner-join-pushdown-enabled=false' or the flag is not set) then it's optimize method will not be invoked.
+
+#### 3. Inequality join pushdown
+
+We also have one more flag 'optimizer.inequality-join-pushdown-enabled' in config.properties with default value as false. This is used to denote whether join conditions with inequality conditions (<, >, <=, >=, !=, <>) should be pushed down or not. 
+Eg :- 
+```
+optimizer.inner-join-pushdown-enabled = true
+optimizer.inequality-join-pushdown-enabled = false
+```
+This will only pushdown inner joins based on equality conditions (=)
+
+``
+optimizer.inner-join-pushdown-enabled = true
+optimizer.inequality-join-pushdown-enabled = true
+```
+This will pushdown inner joins based on equality conditions (=) and inequality conditions (<, >, <=, >=, !=, <>).
 
 ## [Optional] Metrics
 
