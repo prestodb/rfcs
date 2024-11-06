@@ -610,10 +610,44 @@ JdbcJoinPushdown optimizer will create a TableScanNode structure which is able t
 #### Pushdown the overall filter to the newly created TableScanNode.
 After creating Single TableScanNode for grouped tables (refer point 7) we need to pushdown the FilterNode (join criteria specific to the grouped tables of new tableScanNode and all filters specific to the group tables) on connector level for the applicable filter and maintain the FilterNode for presto if it is not able to pushdown. For this we are just invoking predicate pushdown after jdbc join pushdown optimizer and there is no code change.
 
-^ add image to this 
-
 ## JdbcComputePushdown Optimizer
-Using JdbcComputePushdown optimizer, we are pushing down the join criteria as additional predicate. For doing this, we enhanced JdbcComputePushdown optimizer 
+Using JdbcComputePushdown optimizer, we are pushing down the join criteria as additional predicate. For doing this, we enhanced JdbcComputePushdown optimizer by adding a join predicate to sql translator. 
+```
+private final JdbcJoinPredicateToSqlTranslator jdbcJoinPredicateToSqlTranslator;
+```
+
+```
+this.jdbcJoinPredicateToSqlTranslator = new JdbcJoinPredicateToSqlTranslator(
+                functionMetadataManager,
+                buildFunctionTranslator(ImmutableSet.of(JoinOperatorTranslators.class)),
+                identifierQuote);
+```
+We have also added visitPlan() method and enhanced the visitFilter() method.
+
+```
+@Override
+        public PlanNode visitPlan(PlanNode node, Void context)
+        {
+            ImmutableList.Builder<PlanNode> children = ImmutableList.builder();
+            boolean changed = false;
+            for (PlanNode child : node.getSources()) {
+                PlanNode newChild = child.accept(this, null);
+                if (newChild != child) {
+                    changed = true;
+                }
+                children.add(newChild);
+            }
+
+            if (!changed) {
+                return node;
+            }
+            return node.replaceChildren(children.build());
+        }
+```
+
+Enhancements done to visitFilter are from this PR : https://github.com/prestodb/presto/pull/16412/
+Before, if all the filter could not be pushed down, nothing would be pushed down.
+The changes help in finding what all can be pushed down and able to be translated. The filters that can't be pushed down are kept in a new FilterNode.
 
 ## Self Join
 Self join is a scenario where a table is joined with itself. This works natively in Presto. When you do a self join in presto, that is sent as select statements to the datasource first. On top of that presto does all the joining and filtering etc. 
