@@ -482,7 +482,7 @@ Now we group table1 and table2 based on catalog pg. The table3 and table4 group 
 
 #### 4. Build join relation for the grouped tables from all the join predicates
 
-The MultiJoinNode already flattened the join criteria  and created the overall join predicate list called joinFilter. We are able to re-create the equality and inequality inference for joinFilter using existing presto EqualityInference methods.
+The MultiJoinNode already flattened the join criteria  and created the overall join predicate list called joinFilter. We are able to re-create the equality and inequality inference for joinFilter using existing presto EqualityInference and InequalityInference methods.
 
 The approach is that we could recreate the overall join ‘on clause’ against the grouped table and check which all grouped tables are participated on that join clause. If there is any table which is not participating on any one of the join clause then we could remove it from the grouped list and add it to rewrittenSources. Once you identify the tables related to join ‘on clause’ then we should pass the join ‘on clause’  to connector level for executing it. So it could be understood by the connector. That means we should remove tables from the group list which ‘on clause’ cannot process by the underlying connector and will add to rewrittenSources.
 
