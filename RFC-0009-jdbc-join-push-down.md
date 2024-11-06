@@ -717,22 +717,22 @@ Based on the discussion, this may need to be updated with feedback from reviewer
 
 ## Adoption Plan
 
-- What impact (if any) will there be on existing users? Are there any new session parameters, configurations, SPI updates, client API updates, or SQL grammar?
+What impact (if any) will there be on existing users? Are there any new session parameters, configurations, SPI updates, client API updates, or SQL grammar?
 There will be a new session parameter. Users will need to set it to True if they queries to be pushed down to JDBC connectors.
 
-- If we are changing behaviour how will we phase out the older behaviour?
+If we are changing behaviour how will we phase out the older behaviour?
 Not Applicable
 
-- If we need special migration tools, describe them here.
+If we need special migration tools, describe them here.
 Not Applicable
 
-- When will we remove the existing behaviour, if applicable.
+When will we remove the existing behaviour, if applicable.
 Not Applicable
 
-- How should this feature be taught to new and existing users? Basically mention if documentation changes/new blog are needed?
+How should this feature be taught to new and existing users? Basically mention if documentation changes/new blog are needed?
 Yes, documentation changes will be required. 
 
-- What related issues do you consider out of scope for this RFC that could be addressed in the future independently of the solution that comes out of this RFC?
+What related issues do you consider out of scope for this RFC that could be addressed in the future independently of the solution that comes out of this RFC?
 1. Push down all kinds of Joins
 2. Some queries may become slower due to this change, if the session flag is set to true.
 
