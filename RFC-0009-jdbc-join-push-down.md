@@ -101,7 +101,7 @@ Below is the example of PlanNode that is created for the join query.
 
 Currently while executing a JoinNode, presto creates separate TableScanNodes for each table that is participating in the join query. This TableScanNode info is used by the connector to create the select query for that table. On top of this select query result, presto apply join condition and other predicates to provide the final result.
 
-![Joinpushdown presto plan performance](RFC-0009-jdbc-join-push-down/cur_join_wrks.png) 
+![Joinpushdown presto plan performance](RFC-0009-jdbc-join-push-down/current_presto_working.png) 
 
 In the proposed implementation, all tables from the join query are grouped based on the Jdbc connector (data source). A single TableScanNode is created for each jdbc connector by using the grouped table info, wherever it is possible. It ensures a single TableScanNode against a connector rather than against each table of a join query. 
 
