@@ -318,7 +318,9 @@ private PlanNode createLeftDeepJoinTree(MultiJoinNode multiJoinNode, PlanNodeIdA
 
 In GroupInnerJoinsByConnector optimize method we need to invoke Rewriter to rewrite the plannode if it contains JoinNode. JoinNode rewrite is possible by overriding the visitJoin() method of SimplePlanRewriter.
 
-In visitJoin() we should have method to validate JdbcJoinPushdown Conditions that is explained [here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource). If the JoinNode satisfies the JdbcJoinPushdown Conditions we should pushdown the Join by creating a single table scan node for that Join. 
+In visitJoin() we will validate JdbcJoinPushdown Conditions that is explained [here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource). If the JoinNode satisfies the JdbcJoinPushdown Conditions we should pushdown the Join by creating a single table scan node for that Join. 
+
+In visitFilter() method optimizes the plan node by pushing filter conditions, by combining filter predicates directly into a JoinNode. This helps is the case of a filterNode is coming on top of a joinNode in our plan. We analyze the predicate of the node then translate it into an expression. Then finally create a joinNode with this expression as the filter and return it.
 
 JoinPushdown should happen for InnerJoin. No other Joins like LEFT JOIN, RIGHT JOIN, OUTER JOIN, CROSS JOIN, etc should be pushed down.
 
@@ -362,8 +364,50 @@ public class GroupInnerJoinsByConnector
             PlanNode source = getCombinedJoin(node, functionResolution, determinismEvaluator, metadata);
             return source;
         }
+/**
+         * This method is only for the top most filter on top of join node.
+         * The JoinNodeFlattener#flattenNode should take care of handling intermediate Filter nodes for the rest of the tree
+         *
+         * If presto gets non equijoin criteria like ( < , >, <=, >=, !=, etc.) for a JoinNode,
+         * then this criteria is converted as a filter on top of JoinNode and the JoinNode should not have joincriteria or the joinfilter inside the JoinNode.
+         * This kind of filter on top JoinNode is handled here to perform join pushdown
+         *
+         * @param node
+         * @param context
+         * @return PlanNode
+         */
+        @Override
+        public PlanNode visitFilter(FilterNode node, RewriteContext<Void> context)
+        {
+            if ((node.getSource() instanceof JoinNode)) {
+                JoinNode oldJoinNode = (JoinNode) node.getSource();
+                ImmutableList.Builder<RowExpression> predicates = ImmutableList.builder();
+                predicates.add(node.getPredicate());
+                if (oldJoinNode.getFilter().isPresent()) {
+                    predicates.add(oldJoinNode.getFilter().get());
+                }
+                RowExpression expression = logicalRowExpressions.combineConjuncts(predicates.build());
+                JoinNode newJoin = new JoinNode(oldJoinNode.getSourceLocation(),
+                                                idAllocator.getNextId(),
+                                                oldJoinNode.getStatsEquivalentPlanNode(),
+                                                oldJoinNode.getType(),
+                                                oldJoinNode.getLeft(),
+                                                oldJoinNode.getRight(),
+                                                oldJoinNode.getCriteria(),
+                                                oldJoinNode.getOutputVariables(),
+                                                Optional.ofNullable(expression),
+                                                oldJoinNode.getLeftHashVariable(),
+                                                oldJoinNode.getRightHashVariable(),
+                                                oldJoinNode.getDistributionType(),
+                                                oldJoinNode.getDynamicFilters());
+                PlanNode source = getCombinedJoin(newJoin, functionResolution, determinismEvaluator, metadata, session);
+                if (!source.getId().equals(newJoin.getId())) {
+                    return source;
+                }
+            }
+            return node;
+        }
     }
-    
 }
 ```
 #### 2. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
