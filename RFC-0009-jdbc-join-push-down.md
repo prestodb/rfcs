@@ -284,6 +284,7 @@ public Set<ConnectorCapabilities> getCapabilities()
 ```
 - 3.3. Once it identifies the connector as pushdown supported, it creates a Map with key as connector name and value as a List of tables which are from the connector. [Details available here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#3-use-multijoinnode-to-group-jdbc-tables-based-on-connector-name-1)
 - 3.4. This ensures that no other connector is affected by this optimizer. Only connectors with Join pushdown capability will be pushed down.
+- In-depth details are available [here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#3-use-multijoinnode-to-group-jdbc-tables-based-on-connector-name-1)
 
 #### 4. Grouping tables for creating join query - based on [JDBC datasource capability](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
 - 4.1. JoinTables (List of ConnectorTableHandle) creation happens from the Map which is created above. [Point number 3.3]
