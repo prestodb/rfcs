@@ -289,6 +289,7 @@ public Set<ConnectorCapabilities> getCapabilities()
 #### 4. Grouping tables for creating join query - based on [JDBC datasource capability](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
 - 4.1. JoinTables (List of ConnectorTableHandle) creation happens from the Map which is created above. [Point number 3.3]
 - 4.2. For each item in map, based on connector, we get a list of tables/nodes. Each node is then analyzed for join pushdown capability and either added to JoinTables List or added back to rewrittenList (If it can not be pushed down).
+- In-depth details are available [here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#4-build-join-relation-for-the-grouped-tables-from-all-the-join-predicates)
 
 #### 5. If we are able to create a JoinTables list, then we create a single table scan for that and then add to the rewrittenList.
 - 5.1. If there are 4 tables in JoinTables list against Postgres, then we create a single table scan node with ConnectorHandleSet 
