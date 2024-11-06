@@ -367,8 +367,6 @@ public class GroupInnerJoinsByConnector
 ```
 #### 2. Flatten all TableScanNode, filter, outputVariables and assignment to a new data structure called MultiJoinNode
 
-If a JoinNode satisfies all JdbcJoinPushdown requirement, then the very first step is to break the left deep tree structure of JoinNode and create a flattened structure called MultiJoinNode.
-
 On visitJoin(), the core logic is started by flattening the JoinNode tables into a list. We also require to flatten all the predicates including Join predicate and filter predicate into a single filter list. We separate all the output variables and assignments against the connector and keep for further processing. This flatten result will keep in a data structure called MultiJoinNode.
 
 ```
