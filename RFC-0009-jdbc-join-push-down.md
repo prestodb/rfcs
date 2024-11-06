@@ -604,7 +604,6 @@ Inside the visitTableScan() :
 JdbcJoinPushdown optimizer will create a TableScanNode structure which is able to hold all the jdbc tables which are grouped as part of above implementation. Below is the proposed structure for the new TableScanNode
 
 ![Image 2](RFC-0009-jdbc-join-push-down/in-depth-design-image-2.png)
-^ fix this image.. change to connectotablehandle set
 
 ## PredicatePushDown Optimizer
 
