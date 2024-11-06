@@ -612,6 +612,33 @@ After creating Single TableScanNode for grouped tables (refer point 7) we need t
 ## JdbcComputePushdown Optimizer
 Using JdbcComputePushdown optimizer, we are pushing down the join criteria as additional predicate. For doing this, we enhanced JdbcComputePushdown optimizer 
 
+## Self Join
+Self join is a scenario where a table is joined with itself. This works natively in Presto. When you do a self join in presto, that is sent as select statements to the datasource first. On top of that presto does all the joining and filtering etc. 
+We want to push down this self join to database level. This is similar to pushing down an inner join. But, we faced some difficulties in achieving this.
+
+#### Difficulty faced :
+If we do a join query which joins the same table with itself, We get 2 TableScans in the plan.
+There isn’t a way to differentiate between the columns of these TableScans.
+
+Example : Assume there is a column 'col_1' in a table 'table_1'.  We join table_1 with itself ->
+```
+select * from table_1 a join table_1 b on a.col_1 = b.col_1;
+```
+The column 'col_1' will be referred as col_1 (in outputVariables) inside TableScan1 and will point to 'col_1' JdbcColumnHandle (in assignments)
+It will be referred as col_1_0 (in outputVariables) inside TableScan2 and will point to 'col_1' JdbcColumnHandle (in assignments)
+When our Optimiser 'JdbcJoinRenderByConnector' is run, both these TableScans get converted to a Single TableScan, with assignments, outputVariables, etc. combined.
+(Note : assignments now has two references to the same column 'col_1'. One from 'col_1' and the other from 'col_1_0')
+This creates a problem in pushPredicateIntoTableScan method in PickTableLayout class, which assumes that all the values in assignments are unique.
+This assumption by presto is done on the basis that till now all queries done by presto to any database is as a select from a single table.
+
+#### Proposed Solution :
+We can add a field 'table_alias' (table alias) to JdbcTableHandle. This is not the table alias that the user passes in his query.
+This alias can then be used inside JdbcColumnHandle to unique identify columns and assignments
+This alias can then also be used in the Join conditions, predicates, filters, etc.. which will simplify the Pushdown Query that we create in Query Builder.
+This solved the issue and we were able to push down self joins as well.
+
+We are currently setting this table_alias value as a randomised string in BaseJdbcClient. This is not a right implementation and we are planning to set it inside the JdbcJoinPushdown optimizer. 
+
 ## Changes required in JdbcSplit
 
 We have added a new feild called joinTables in JdbcSplit.java
