@@ -253,7 +253,7 @@ Below is the overall process :
 
 GroupInnerJoinsByConnector Optimizer is implemented inside the presto-main module. This optimizer is used to group the tables (which are part of inner joins) in a query so that we can push down these grouped tables.
 
-GroupInnerJoinsByConnector in brief : 
+#### GroupInnerJoinsByConnector in brief : 
 
 #### 1. Create a plan rewriter for GroupInnerJoinsByConnector by implementing SimplePlanRewriter
 - The GroupInnerJoinsByConnector uses SimplePlanRewriter methods VisitJoin and VisitFilter to traverse through the nodes. The reason we need to traverse the JoinNode is that we need to identify whether the join query (presto plan) is able to be processed by the datasource. For this we traverse all the nodes of the join node and [validate all the 5 points](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#join-query-pushdown-in-presto-jdbc-datasource)
