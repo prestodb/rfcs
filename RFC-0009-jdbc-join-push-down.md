@@ -438,7 +438,7 @@ private void flattenNode(PlanNode resolved)
 }
 ``` 
 
-Here the sources contain all the tables (irrespective of connector) of that JoinNode, filters contain all the predicate of that JoinNode. Now we have completed the flattening of JoinNode.
+Here the sources contain all the tables (irrespective of connector) of that JoinNode, filters contain all the predicate of sundered nodes and joinCriteriaFilters contains predicate of each JoinNode. Now we have completed the flattening of JoinNode.
 
 #### 3. Use MultiJoinNode to group Jdbc Tables based on connector name 
 
