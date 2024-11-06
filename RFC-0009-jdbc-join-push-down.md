@@ -300,6 +300,7 @@ public Set<ConnectorCapabilities> getCapabilities()
 
 #### 6. Create a joinNode for each sourceList
 - Iterate over the rewrittenMultiJoinNode, for each sourceList, call createLeftDeepJoinTree() method. This creates a joinNode with all the nodes in the sourceList.
+- In-depth details are available [here](https://github.com/Thanzeel-Hassan-IBM/rfcs/blob/main/RFC-0009-jdbc-join-push-down.md#5-recreate-left-deep-join-node-from-the-multijoinnode-source-list)
 
 #### 7. Create a filterNode on top of this joinNode
 - A new FilterNode is created with the combinedFilters of the multiJoinNode as the predicate. This is finally returned.
