@@ -810,7 +810,7 @@ optimizer.inequality-join-pushdown-enabled = false
 ```
 This will only pushdown inner joins based on equality conditions (=)
 
-``
+```
 optimizer.inner-join-pushdown-enabled = true
 optimizer.inequality-join-pushdown-enabled = true
 ```
