@@ -1,0 +1,59 @@
+Query Plan
+"Fragment 1 [HASH]
+    CPU: 5.45s, Scheduled: 6.49s, Input: 46,500,000 rows (3.93GB); per task: avg.: 46,500,000.00 std.dev.: 0.00, Output: 8 rows (754B), 1 tasks
+    Output layout: [custkey, name, address, phone, custkey_0, orderstatus, totalprice, orderdate, orderpriority, clerk, shippriority]
+    Output partitioning: SINGLE []
+    Stage Execution Strategy: UNGROUPED_EXECUTION
+    - InnerJoin[PlanNodeId 4][(""custkey"" = ""orderkey"")][$hashvalue, $hashvalue_52] => [custkey:bigint, name:varchar(25), address:varchar(40), phone:varchar(15), custkey_0:bigint, orderstatus:varchar(1), totalprice:double, orderdate:date, orderpriority:varchar(15), clerk:varchar(15), shippriority:integer]
+            CPU: 3.69s (2.41%), Scheduled: 4.38s (1.96%), Output: 8 rows (754B)
+            Left (probe) Input avg.: 2,812,500.00 rows, Input std.dev.: 201.49%
+            Right (build) Input avg.: 93,750.00 rows, Input std.dev.: 387.30%
+            Distribution: PARTITIONED
+        - RemoteSource[2] => [custkey:bigint, name:varchar(25), address:varchar(40), phone:varchar(15), $hashvalue:bigint]
+                CPU: 811.00ms (0.53%), Scheduled: 984.00ms (0.44%), Output: 45,000,000 rows (3.81GB)
+                Input avg.: 2,812,500.00 rows, Input std.dev.: 201.49%
+        - LocalExchange[PlanNodeId 370][HASH][$hashvalue_52] (orderkey) => [orderkey:bigint, custkey_0:bigint, orderstatus:varchar(1), totalprice:double, orderdate:date, orderpriority:varchar(15), clerk:varchar(15), shippriority:integer, $hashvalue_52:bigint]
+                Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: ?}
+                CPU: 368.00ms (0.24%), Scheduled: 406.00ms (0.18%), Output: 1,500,000 rows (122.17MB)
+                Input avg.: 93,750.00 rows, Input std.dev.: 205.66%
+            - RemoteSource[3] => [orderkey:bigint, custkey_0:bigint, orderstatus:varchar(1), totalprice:double, orderdate:date, orderpriority:varchar(15), clerk:varchar(15), shippriority:integer, $hashvalue_53:bigint]
+                    CPU: 58.00ms (0.04%), Scheduled: 79.00ms (0.04%), Output: 1,500,000 rows (122.17MB)
+                    Input avg.: 93,750.00 rows, Input std.dev.: 205.66%
+
+Fragment 2 [SOURCE]
+    CPU: 2.30m, Scheduled: 3.38m, Input: 45,000,000 rows (0B); per task: avg.: 45,000,000.00 std.dev.: 0.00, Output: 45,000,000 rows (3.81GB), 1 tasks
+    Output layout: [custkey, name, address, phone, $hashvalue_51]
+    Output partitioning: HASH [custkey][$hashvalue_51]
+    Stage Execution Strategy: UNGROUPED_EXECUTION
+    - ScanProject[PlanNodeId 0,408][table = TableHandle {connectorId='postgres', connectorHandle='JdbcTableHandle{connectorId=postgres, schemaTableName=pg.customer, catalogName=null, schemaName=pg, tableName=customer, joinTables=Optional.empty}', layout='Optional[{domains=ALL, additionalPredicate={}}]'}, grouped = false, projectLocality = LOCAL] => [custkey:bigint, name:varchar(25), address:varchar(40), phone:varchar(15), $hashvalue_51:bigint]
+            Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}
+            CPU: 2.29m (89.91%), Scheduled: 3.38m (90.67%), Output: 45,000,000 rows (3.81GB)
+            Input avg.: 45,000,000.00 rows, Input std.dev.: 0.00%
+            $hashvalue_51 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(custkey), BIGINT'0')) (16:3)
+            LAYOUT: {domains=ALL, additionalPredicate={}}
+            name := JdbcColumnHandle{connectorId=postgres, columnName=name, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=varchar, columnSize=25, decimalDigits=0, arrayDimensions=null}, columnType=varchar(25), nullable=true, comment=Optional.empty} (16:3)
+            phone := JdbcColumnHandle{connectorId=postgres, columnName=phone, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=varchar, columnSize=15, decimalDigits=0, arrayDimensions=null}, columnType=varchar(15), nullable=true, comment=Optional.empty} (16:3)
+            custkey := JdbcColumnHandle{connectorId=postgres, columnName=custkey, jdbcTypeHandle=JdbcTypeHandle{jdbcType=-5, jdbcTypeName=int8, columnSize=19, decimalDigits=0, arrayDimensions=null}, columnType=bigint, nullable=true, comment=Optional.empty} (16:3)
+            address := JdbcColumnHandle{connectorId=postgres, columnName=address, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=varchar, columnSize=40, decimalDigits=0, arrayDimensions=null}, columnType=varchar(40), nullable=true, comment=Optional.empty} (16:3)
+            Input: 45,000,000 rows (0B), Filtered: 0.00%
+
+Fragment 3 [SOURCE]
+    CPU: 10.52s, Scheduled: 15.01s, Input: 1,500,000 rows (0B); per task: avg.: 1,500,000.00 std.dev.: 0.00, Output: 1,500,000 rows (122.17MB), 1 tasks
+    Output layout: [orderkey, custkey_0, orderstatus, totalprice, orderdate, orderpriority, clerk, shippriority, $hashvalue_54]
+    Output partitioning: HASH [orderkey][$hashvalue_54]
+    Stage Execution Strategy: UNGROUPED_EXECUTION
+    - ScanProject[PlanNodeId 1,409][table = TableHandle {connectorId='postgres', connectorHandle='JdbcTableHandle{connectorId=postgres, schemaTableName=pg.orders, catalogName=null, schemaName=pg, tableName=orders, joinTables=Optional.empty}', layout='Optional[{domains=ALL, additionalPredicate={}}]'}, grouped = false, projectLocality = LOCAL] => [orderkey:bigint, custkey_0:bigint, orderstatus:varchar(1), totalprice:double, orderdate:date, orderpriority:varchar(15), clerk:varchar(15), shippriority:integer, $hashvalue_54:bigint]
+            Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}
+            CPU: 10.52s (6.87%), Scheduled: 15.01s (6.72%), Output: 1,500,000 rows (122.17MB)
+            Input avg.: 1,500,000.00 rows, Input std.dev.: 0.00%
+            $hashvalue_54 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(orderkey), BIGINT'0')) (17:8)
+            LAYOUT: {domains=ALL, additionalPredicate={}}
+            orderpriority := JdbcColumnHandle{connectorId=postgres, columnName=orderpriority, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=varchar, columnSize=15, decimalDigits=0, arrayDimensions=null}, columnType=varchar(15), nullable=true, comment=Optional.empty} (17:8)
+            orderstatus := JdbcColumnHandle{connectorId=postgres, columnName=orderstatus, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=varchar, columnSize=1, decimalDigits=0, arrayDimensions=null}, columnType=varchar(1), nullable=true, comment=Optional.empty} (17:8)
+            orderdate := JdbcColumnHandle{connectorId=postgres, columnName=orderdate, jdbcTypeHandle=JdbcTypeHandle{jdbcType=91, jdbcTypeName=date, columnSize=13, decimalDigits=0, arrayDimensions=null}, columnType=date, nullable=true, comment=Optional.empty} (17:8)
+            shippriority := JdbcColumnHandle{connectorId=postgres, columnName=shippriority, jdbcTypeHandle=JdbcTypeHandle{jdbcType=4, jdbcTypeName=int4, columnSize=10, decimalDigits=0, arrayDimensions=null}, columnType=integer, nullable=true, comment=Optional.empty} (17:8)
+            orderkey := JdbcColumnHandle{connectorId=postgres, columnName=orderkey, jdbcTypeHandle=JdbcTypeHandle{jdbcType=-5, jdbcTypeName=int8, columnSize=19, decimalDigits=0, arrayDimensions=null}, columnType=bigint, nullable=true, comment=Optional.empty} (17:8)
+            custkey_0 := JdbcColumnHandle{connectorId=postgres, columnName=custkey, jdbcTypeHandle=JdbcTypeHandle{jdbcType=-5, jdbcTypeName=int8, columnSize=19, decimalDigits=0, arrayDimensions=null}, columnType=bigint, nullable=true, comment=Optional.empty} (17:8)
+            clerk := JdbcColumnHandle{connectorId=postgres, columnName=clerk, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=varchar, columnSize=15, decimalDigits=0, arrayDimensions=null}, columnType=varchar(15), nullable=true, comment=Optional.empty} (17:8)
+            totalprice := JdbcColumnHandle{connectorId=postgres, columnName=totalprice, jdbcTypeHandle=JdbcTypeHandle{jdbcType=8, jdbcTypeName=float8, columnSize=17, decimalDigits=17, arrayDimensions=null}, columnType=double, nullable=true, comment=Optional.empty} (17:8)
+            Input: 1,500,000 rows (0B), Filtered: 0.00%",

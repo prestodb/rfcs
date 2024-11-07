@@ -1,0 +1,16 @@
+Query Plan
+"Fragment 1 [SOURCE]
+    CPU: 30.97ms, Scheduled: 31.86s, Input: 25 rows (0B); per task: avg.: 25.00 std.dev.: 0.00, Output: 25 rows (1.73kB), 1 tasks
+    Output layout: [custkey, name, employee_id, address_1, nationkey_2]
+    Output partitioning: SINGLE []
+    Stage Execution Strategy: UNGROUPED_EXECUTION
+    - TableScan[PlanNodeId 362][TableHandle {connectorId='postgres', connectorHandle='JdbcTableHandle{connectorId=postgres, schemaTableName=pg.customer_10mil, catalogName=null, schemaName=pg, tableName=customer_10mil, joinTables=Optional[[JdbcTableHandle{connectorId=postgres, schemaTableName=pg.customer_10mil, catalogName=null, schemaName=pg, tableName=customer_10mil, joinTables=Optional.empty}, JdbcTableHandle{connectorId=postgres, schemaTableName=pg.employee, catalogName=null, schemaName=pg, tableName=employee, joinTables=Optional.empty}]]}', layout='Optional[{domains=ALL, additionalPredicate={}}]'}, grouped = false] => [custkey:bigint, name:varchar(25), employee_id:bigint, address_1:varchar(40), nationkey_2:bigint]
+            CPU: 29.00ms (100.00%), Scheduled: 31.86s (100.00%), Output: 25 rows (1.73kB)
+            Input avg.: 25.00 rows, Input std.dev.: 0.00%
+            LAYOUT: {domains=ALL, additionalPredicate={}}
+            employee_id := JdbcColumnHandle{connectorId=postgres, columnName=employee_id, jdbcTypeHandle=JdbcTypeHandle{jdbcType=-5, jdbcTypeName=int8, columnSize=19, decimalDigits=0, arrayDimensions=null}, columnType=bigint, nullable=true, comment=Optional.empty} (10:8)
+            custkey := JdbcColumnHandle{connectorId=postgres, columnName=custkey, jdbcTypeHandle=JdbcTypeHandle{jdbcType=-5, jdbcTypeName=int8, columnSize=19, decimalDigits=0, arrayDimensions=null}, columnType=bigint, nullable=true, comment=Optional.empty} (9:3)
+            address_1 := JdbcColumnHandle{connectorId=postgres, columnName=address, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=varchar, columnSize=40, decimalDigits=0, arrayDimensions=null}, columnType=varchar(40), nullable=true, comment=Optional.empty} (10:8)
+            name := JdbcColumnHandle{connectorId=postgres, columnName=name, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=varchar, columnSize=25, decimalDigits=0, arrayDimensions=null}, columnType=varchar(25), nullable=true, comment=Optional.empty} (9:3)
+            nationkey_2 := JdbcColumnHandle{connectorId=postgres, columnName=nationkey, jdbcTypeHandle=JdbcTypeHandle{jdbcType=-5, jdbcTypeName=int8, columnSize=19, decimalDigits=0, arrayDimensions=null}, columnType=bigint, nullable=true, comment=Optional.empty} (10:8)
+            Input: 25 rows (0B), Filtered: 0.00%",

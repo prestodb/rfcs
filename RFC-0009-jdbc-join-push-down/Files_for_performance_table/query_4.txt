@@ -1,0 +1,16 @@
+Select
+  t1.custkey as t1_id,
+  t2.custkey as t2_id,
+  t1.name,
+  t1.address,
+  t1.phone,
+  t2.orderstatus,
+  t2.orderdate,
+  t2.totalprice,
+  t2.orderpriority,
+  t2.orderstatus,
+  t2.clerk,
+  t2.shippriority
+from
+  "postgres"."pg".customer t1
+  join "postgres"."pg".orders t2 on t1.custkey = t2.orderkey;
