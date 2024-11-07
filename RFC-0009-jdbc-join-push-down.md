@@ -874,10 +874,15 @@ We have done a POC on the implementation and we were able to see following perfo
 
 ## Limitations
 
-1) Join pushdown is based on pushing down the join criteria as a filter object to the underlying datasource using existing predicate pushdown capability. So, Join pushdown inherit all features and drawbacks of existing filter pushdown.For Eg: 
+1) Dependency on Predicate Pushdown for Join Pushdown:
 
-It cannot pushdown the join with criteria OR if presto not inferring to create a join criteria. Join pushdown uses filter pushdown capabilities to pushdown the join and the filters condition which is not pushing down now by the presto (eg: like '%FR%', OR, etc) is not handling in Join condition (join criteria) and that join will not pushdown to underlying datasource.
+- Join pushdown relies on pushing down join criteria as a filter object to the underlying datasource, using the existing filter pushdown capabilities. Therefore, join pushdown inherits all the features and limitations of the current filter pushdown functionality.
+- Example:
+  Joins with OR conditions or cases where Presto doesn’t infer a join criterion cannot be pushed down.
+  Join pushdown cannot handle certain filters that Presto doesn’t currently push down, such as LIKE '%FR%' or OR conditions. These filters are also not handled in the join 
+  criteria, so such joins will not be pushed down to the datasource.
 
-2) Jdbc Join Pushdown should happen only for the join queries which is able to be understood by the database. Sometime if we use filter, projection, condition or special keyword along with join query presto will create a function or a special operator node on top of that table and it is not able to process by the datasource. This kind of table or join cannot pushdown.
+2) Compatibility with Database-Supported Join Queries:
 
-3) The implementation that did for handling self join is not an  ideal one, and it is directly connected with tableHandleCache. By default, the tableHandleCache is turned off in presto and if we enable that self join pushdown will fail on November tech preview release.
+- Jdbc join pushdown only works for join queries that the database can fully understand.
+- If a query uses filters, projections, conditions, or special keywords along with a join, Presto may add a function or special operator node to that table. This transformation may prevent the datasource from processing the join, making it ineligible for pushdown.
