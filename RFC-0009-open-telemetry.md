@@ -65,8 +65,9 @@ OpenTelemetry maintains several official propagators. The default propagator is 
 Based on the discussion, this may need to be updated with feedback from reviewers.
 
 ## Adoption Plan
+Tracing providers can be implemented by extending the `Tracing Factory` interface in SPI module and provide the implementation.
 
-Presto Open Telemetry can be configured by modifying the values in presto-main/etc/telemetry.properties
+As of now we have one implementation for Open Telemetry can be configured by modifying the values in presto-main/etc/telemetry.properties
 
 ```properties
 tracing-factory.name=otel
