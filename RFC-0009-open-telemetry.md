@@ -59,6 +59,8 @@ OpenTelemetry maintains several official propagators. The default propagator is 
 
 - In some other areas parent context is available in child context and we directly set the parent context in child spans.
 
+### Low level design
+![Trace flow](/RFC-0009-open-telemetry/open-telemetry-trace-flow-diagram.png)
 
 ## [Optional] Other Approaches Considered
 
