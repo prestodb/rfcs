@@ -1,0 +1,20 @@
+Query Plan
+"Fragment 1 [SOURCE]
+    CPU: 9.99ms, Scheduled: 10.59s, Input: 50 rows (0B); per task: avg.: 50.00 std.dev.: 0.00, Output: 50 rows (3.00kB), 1 tasks
+    Output layout: [assignment_id, employee_id, role, is_current, cust_id, first_name, last_name, assignment_id_2, default_int_4]
+    Output partitioning: SINGLE []
+    Stage Execution Strategy: UNGROUPED_EXECUTION
+    - TableScan[PlanNodeId 502][TableHandle {connectorId='db2', connectorHandle='JdbcTableHandle{connectorId=db2, schemaTableName=db2.assignments_10_million, catalogName=null, schemaName=DB2, tableName=ASSIGNMENTS_10_MILLION, joinTables=Optional[[JdbcTableHandle{connectorId=db2, schemaTableName=db2.assignments_10_million, catalogName=null, schemaName=DB2, tableName=ASSIGNMENTS_10_MILLION, joinTables=Optional.empty}, JdbcTableHandle{connectorId=db2, schemaTableName=db2.customer_10_million, catalogName=null, schemaName=DB2, tableName=CUSTOMER_10_MILLION, joinTables=Optional.empty}, JdbcTableHandle{connectorId=db2, schemaTableName=db2.join_table_50_rows, catalogName=null, schemaName=DB2, tableName=JOIN_TABLE_50_ROWS, joinTables=Optional.empty}]]}', layout='Optional[{domains=ALL, additionalPredicate={}}]'}, grouped = false] => [assignment_id:integer, employee_id:integer, role:varchar, is_current:boolean, cust_id:integer, first_name:varchar, last_name:varchar, assignment_id_2:integer, default_int_4:integer]
+            CPU: 9.00ms (100.00%), Scheduled: 10.59s (100.00%), Output: 50 rows (3kB)
+            Input avg.: 50.00 rows, Input std.dev.: 0.00%
+            LAYOUT: {domains=ALL, additionalPredicate={}}
+            is_current := JdbcColumnHandle{connectorId=db2, columnName=IS_CURRENT, jdbcTypeHandle=JdbcTypeHandle{jdbcType=16, jdbcTypeName=BOOLEAN, columnSize=1, decimalDigits=0, arrayDimensions=null}, columnType=boolean, nullable=true, comment=Optional.empty} (12:3)
+            assignment_id := JdbcColumnHandle{connectorId=db2, columnName=ASSIGNMENT_ID, jdbcTypeHandle=JdbcTypeHandle{jdbcType=4, jdbcTypeName=INTEGER, columnSize=10, decimalDigits=0, arrayDimensions=null}, columnType=integer, nullable=true, comment=Optional.empty} (12:3)
+            role := JdbcColumnHandle{connectorId=db2, columnName=ROLE, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=VARCHAR, columnSize=50, decimalDigits=0, arrayDimensions=null}, columnType=varchar, nullable=true, comment=Optional.empty} (12:3)
+            default_int_4 := JdbcColumnHandle{connectorId=db2, columnName=DEFAULT_INT, jdbcTypeHandle=JdbcTypeHandle{jdbcType=4, jdbcTypeName=INTEGER, columnSize=10, decimalDigits=0, arrayDimensions=null}, columnType=integer, nullable=true, comment=Optional.empty} (14:8)
+            employee_id := JdbcColumnHandle{connectorId=db2, columnName=EMPLOYEE_ID, jdbcTypeHandle=JdbcTypeHandle{jdbcType=4, jdbcTypeName=INTEGER, columnSize=10, decimalDigits=0, arrayDimensions=null}, columnType=integer, nullable=true, comment=Optional.empty} (12:3)
+            last_name := JdbcColumnHandle{connectorId=db2, columnName=LAST_NAME, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=VARCHAR, columnSize=50, decimalDigits=0, arrayDimensions=null}, columnType=varchar, nullable=true, comment=Optional.empty} (13:8)
+            assignment_id_2 := JdbcColumnHandle{connectorId=db2, columnName=ASSIGNMENT_ID, jdbcTypeHandle=JdbcTypeHandle{jdbcType=4, jdbcTypeName=INTEGER, columnSize=10, decimalDigits=0, arrayDimensions=null}, columnType=integer, nullable=true, comment=Optional.empty} (14:8)
+            cust_id := JdbcColumnHandle{connectorId=db2, columnName=CUST_ID, jdbcTypeHandle=JdbcTypeHandle{jdbcType=4, jdbcTypeName=INTEGER, columnSize=10, decimalDigits=0, arrayDimensions=null}, columnType=integer, nullable=true, comment=Optional.empty} (13:8)
+            first_name := JdbcColumnHandle{connectorId=db2, columnName=FIRST_NAME, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=VARCHAR, columnSize=50, decimalDigits=0, arrayDimensions=null}, columnType=varchar, nullable=true, comment=Optional.empty} (13:8)
+            Input: 50 rows (0B), Filtered: 0.00%",

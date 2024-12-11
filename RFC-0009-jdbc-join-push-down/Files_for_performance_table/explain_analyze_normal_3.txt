@@ -1,0 +1,52 @@
+Query Plan
+"Fragment 1 [HASH]
+    CPU: 3.62s, Scheduled: 5.66s, Input: 20,000,000 rows (934.59MB); per task: avg.: 20,000,000.00 std.dev.: 0.00, Output: 25 rows (1.14kB), 1 tasks
+    Output layout: [custkey, name, address_1, nationkey_2]
+    Output partitioning: SINGLE []
+    Stage Execution Strategy: UNGROUPED_EXECUTION
+    - InnerJoin[PlanNodeId 4][(""custkey"" = ""employee_id"")][$hashvalue, $hashvalue_29] => [custkey:bigint, name:varchar(25), address_1:varchar(40), nationkey_2:bigint]
+            CPU: 1.86s (4.75%), Scheduled: 3.57s (4.18%), Output: 25 rows (1.14kB)
+            Left (probe) Input avg.: 625,000.00 rows, Input std.dev.: 182.80%
+            Right (build) Input avg.: 625,000.00 rows, Input std.dev.: 387.30%
+            Distribution: PARTITIONED
+        - RemoteSource[2] => [custkey:bigint, name:varchar(25), $hashvalue:bigint]
+                CPU: 107.00ms (0.27%), Scheduled: 125.00ms (0.15%), Output: 10,000,000 rows (391.01MB)
+                Input avg.: 625,000.00 rows, Input std.dev.: 182.80%
+        - LocalExchange[PlanNodeId 364][HASH][$hashvalue_29] (employee_id) => [employee_id:bigint, address_1:varchar(40), nationkey_2:bigint, $hashvalue_29:bigint]
+                Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: ?}
+                CPU: 1.33s (3.39%), Scheduled: 1.51s (1.77%), Output: 10,000,000 rows (543.58MB)
+                Input avg.: 625,000.00 rows, Input std.dev.: 204.56%
+            - RemoteSource[3] => [employee_id:bigint, address_1:varchar(40), nationkey_2:bigint, $hashvalue_30:bigint]
+                    CPU: 165.00ms (0.42%), Scheduled: 215.00ms (0.25%), Output: 10,000,000 rows (543.58MB)
+                    Input avg.: 625,000.00 rows, Input std.dev.: 204.56%
+
+Fragment 2 [SOURCE]
+    CPU: 16.20s, Scheduled: 36.00s, Input: 10,000,000 rows (0B); per task: avg.: 10,000,000.00 std.dev.: 0.00, Output: 10,000,000 rows (391.01MB), 1 tasks
+    Output layout: [custkey, name, $hashvalue_28]
+    Output partitioning: HASH [custkey][$hashvalue_28]
+    Stage Execution Strategy: UNGROUPED_EXECUTION
+    - ScanProject[PlanNodeId 0,402][table = TableHandle {connectorId='postgres', connectorHandle='JdbcTableHandle{connectorId=postgres, schemaTableName=pg.customer_10mil, catalogName=null, schemaName=pg, tableName=customer_10mil, joinTables=Optional.empty}', layout='Optional[{domains=ALL, additionalPredicate={}}]'}, grouped = false, projectLocality = LOCAL] => [custkey:bigint, name:varchar(25), $hashvalue_28:bigint]
+            Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}
+            CPU: 16.20s (41.44%), Scheduled: 35.99s (42.09%), Output: 10,000,000 rows (391.01MB)
+            Input avg.: 10,000,000.00 rows, Input std.dev.: 0.00%
+            $hashvalue_28 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(custkey), BIGINT'0')) (9:3)
+            LAYOUT: {domains=ALL, additionalPredicate={}}
+            name := JdbcColumnHandle{connectorId=postgres, columnName=name, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=varchar, columnSize=25, decimalDigits=0, arrayDimensions=null}, columnType=varchar(25), nullable=true, comment=Optional.empty} (9:3)
+            custkey := JdbcColumnHandle{connectorId=postgres, columnName=custkey, jdbcTypeHandle=JdbcTypeHandle{jdbcType=-5, jdbcTypeName=int8, columnSize=19, decimalDigits=0, arrayDimensions=null}, columnType=bigint, nullable=true, comment=Optional.empty} (9:3)
+            Input: 10,000,000 rows (0B), Filtered: 0.00%
+
+Fragment 3 [SOURCE]
+    CPU: 19.45s, Scheduled: 44.10s, Input: 10,000,000 rows (0B); per task: avg.: 10,000,000.00 std.dev.: 0.00, Output: 10,000,000 rows (543.58MB), 1 tasks
+    Output layout: [employee_id, address_1, nationkey_2, $hashvalue_31]
+    Output partitioning: HASH [employee_id][$hashvalue_31]
+    Stage Execution Strategy: UNGROUPED_EXECUTION
+    - ScanProject[PlanNodeId 1,403][table = TableHandle {connectorId='postgres', connectorHandle='JdbcTableHandle{connectorId=postgres, schemaTableName=pg.employee, catalogName=null, schemaName=pg, tableName=employee, joinTables=Optional.empty}', layout='Optional[{domains=ALL, additionalPredicate={}}]'}, grouped = false, projectLocality = LOCAL] => [employee_id:bigint, address_1:varchar(40), nationkey_2:bigint, $hashvalue_31:bigint]
+            Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}
+            CPU: 19.44s (49.73%), Scheduled: 44.09s (51.56%), Output: 10,000,000 rows (543.58MB)
+            Input avg.: 10,000,000.00 rows, Input std.dev.: 0.00%
+            $hashvalue_31 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(employee_id), BIGINT'0')) (10:8)
+            LAYOUT: {domains=ALL, additionalPredicate={}}
+            nationkey_2 := JdbcColumnHandle{connectorId=postgres, columnName=nationkey, jdbcTypeHandle=JdbcTypeHandle{jdbcType=-5, jdbcTypeName=int8, columnSize=19, decimalDigits=0, arrayDimensions=null}, columnType=bigint, nullable=true, comment=Optional.empty} (10:8)
+            address_1 := JdbcColumnHandle{connectorId=postgres, columnName=address, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=varchar, columnSize=40, decimalDigits=0, arrayDimensions=null}, columnType=varchar(40), nullable=true, comment=Optional.empty} (10:8)
+            employee_id := JdbcColumnHandle{connectorId=postgres, columnName=employee_id, jdbcTypeHandle=JdbcTypeHandle{jdbcType=-5, jdbcTypeName=int8, columnSize=19, decimalDigits=0, arrayDimensions=null}, columnType=bigint, nullable=true, comment=Optional.empty} (10:8)
+            Input: 10,000,000 rows (0B), Filtered: 0.00%",

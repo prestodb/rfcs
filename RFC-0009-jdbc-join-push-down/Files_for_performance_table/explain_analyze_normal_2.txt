@@ -1,0 +1,53 @@
+Query Plan
+"Fragment 1 [HASH]
+    CPU: 1.16s, Scheduled: 2.07s, Input: 10,010,000 rows (271.03MB); per task: avg.: 10,010,000.00 std.dev.: 0.00, Output: 50 rows (1.19kB), 1 tasks
+    Output layout: [assignment_id, role, is_current, default_int_1]
+    Output partitioning: SINGLE []
+    Stage Execution Strategy: UNGROUPED_EXECUTION
+    - InnerJoin[PlanNodeId 4][(""assignment_id"" = ""assignment_id_0"")][$hashvalue, $hashvalue_24] => [assignment_id:integer, role:varchar, is_current:boolean, default_int_1:integer]
+            CPU: 1.02s (5.00%), Scheduled: 1.84s (4.56%), Output: 50 rows (1.19kB)
+            Left (probe) Input avg.: 625,000.00 rows, Input std.dev.: 194.00%
+            Right (build) Input avg.: 625.00 rows, Input std.dev.: 5.72%
+                    Collisions avg.: 497.13 (98.02% est.), Collisions std.dev.: 20.35%
+            Distribution: PARTITIONED
+        - RemoteSource[2] => [assignment_id:integer, role:varchar, is_current:boolean, $hashvalue:bigint]
+                CPU: 102.00ms (0.50%), Scheduled: 154.00ms (0.38%), Output: 10,000,000 rows (270.85MB)
+                Input avg.: 625,000.00 rows, Input std.dev.: 194.00%
+        - LocalExchange[PlanNodeId 364][HASH][$hashvalue_24] (assignment_id_0) => [assignment_id_0:integer, default_int_1:integer, $hashvalue_24:bigint]
+                Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: ?}
+                CPU: 1.00ms (0.00%), Scheduled: 8.00ms (0.02%), Output: 10,000 rows (185.55kB)
+                Input avg.: 625.00 rows, Input std.dev.: 387.30%
+            - RemoteSource[3] => [assignment_id_0:integer, default_int_1:integer, $hashvalue_25:bigint]
+                    CPU: 0.00ns (0.00%), Scheduled: 0.00ns (0.00%), Output: 10,000 rows (185.55kB)
+                    Input avg.: 625.00 rows, Input std.dev.: 387.30%
+
+Fragment 2 [SOURCE]
+    CPU: 19.18s, Scheduled: 36.29s, Input: 10,000,000 rows (0B); per task: avg.: 10,000,000.00 std.dev.: 0.00, Output: 10,000,000 rows (270.85MB), 1 tasks
+    Output layout: [assignment_id, role, is_current, $hashvalue_23]
+    Output partitioning: HASH [assignment_id][$hashvalue_23]
+    Stage Execution Strategy: UNGROUPED_EXECUTION
+    - ScanProject[PlanNodeId 0,402][table = TableHandle {connectorId='db2', connectorHandle='JdbcTableHandle{connectorId=db2, schemaTableName=db2.assignments_10_million, catalogName=null, schemaName=DB2, tableName=ASSIGNMENTS_10_MILLION, joinTables=Optional.empty}', layout='Optional[{domains=ALL, additionalPredicate={}}]'}, grouped = false, projectLocality = LOCAL] => [assignment_id:integer, role:varchar, is_current:boolean, $hashvalue_23:bigint]
+            Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}
+            CPU: 19.18s (94.33%), Scheduled: 36.28s (89.81%), Output: 10,000,000 rows (270.85MB)
+            Input avg.: 10,000,000.00 rows, Input std.dev.: 0.00%
+            $hashvalue_23 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(assignment_id), BIGINT'0')) (9:3)
+            LAYOUT: {domains=ALL, additionalPredicate={}}
+            is_current := JdbcColumnHandle{connectorId=db2, columnName=IS_CURRENT, jdbcTypeHandle=JdbcTypeHandle{jdbcType=16, jdbcTypeName=BOOLEAN, columnSize=1, decimalDigits=0, arrayDimensions=null}, columnType=boolean, nullable=true, comment=Optional.empty} (9:3)
+            role := JdbcColumnHandle{connectorId=db2, columnName=ROLE, jdbcTypeHandle=JdbcTypeHandle{jdbcType=12, jdbcTypeName=VARCHAR, columnSize=50, decimalDigits=0, arrayDimensions=null}, columnType=varchar, nullable=true, comment=Optional.empty} (9:3)
+            assignment_id := JdbcColumnHandle{connectorId=db2, columnName=ASSIGNMENT_ID, jdbcTypeHandle=JdbcTypeHandle{jdbcType=4, jdbcTypeName=INTEGER, columnSize=10, decimalDigits=0, arrayDimensions=null}, columnType=integer, nullable=true, comment=Optional.empty} (9:3)
+            Input: 10,000,000 rows (0B), Filtered: 0.00%
+
+Fragment 3 [SOURCE]
+    CPU: 33.76ms, Scheduled: 2.11s, Input: 10,000 rows (0B); per task: avg.: 10,000.00 std.dev.: 0.00, Output: 10,000 rows (185.55kB), 1 tasks
+    Output layout: [assignment_id_0, default_int_1, $hashvalue_26]
+    Output partitioning: HASH [assignment_id_0][$hashvalue_26]
+    Stage Execution Strategy: UNGROUPED_EXECUTION
+    - ScanProject[PlanNodeId 1,403][table = TableHandle {connectorId='db2', connectorHandle='JdbcTableHandle{connectorId=db2, schemaTableName=db2.join_table_50_rows, catalogName=null, schemaName=DB2, tableName=JOIN_TABLE_50_ROWS, joinTables=Optional.empty}', layout='Optional[{domains=ALL, additionalPredicate={}}]'}, grouped = false, projectLocality = LOCAL] => [assignment_id_0:integer, default_int_1:integer, $hashvalue_26:bigint]
+            Estimates: {source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}/{source: CostBasedSourceInfo, rows: ? (?), cpu: ?, memory: 0.00, network: 0.00}
+            CPU: 34.00ms (0.17%), Scheduled: 2.11s (5.23%), Output: 10,000 rows (185.55kB)
+            Input avg.: 10,000.00 rows, Input std.dev.: 0.00%
+            $hashvalue_26 := combine_hash(BIGINT'0', COALESCE($operator$hash_code(assignment_id_0), BIGINT'0')) (10:8)
+            LAYOUT: {domains=ALL, additionalPredicate={}}
+            assignment_id_0 := JdbcColumnHandle{connectorId=db2, columnName=ASSIGNMENT_ID, jdbcTypeHandle=JdbcTypeHandle{jdbcType=4, jdbcTypeName=INTEGER, columnSize=10, decimalDigits=0, arrayDimensions=null}, columnType=integer, nullable=true, comment=Optional.empty} (10:8)
+            default_int_1 := JdbcColumnHandle{connectorId=db2, columnName=DEFAULT_INT, jdbcTypeHandle=JdbcTypeHandle{jdbcType=4, jdbcTypeName=INTEGER, columnSize=10, decimalDigits=0, arrayDimensions=null}, columnType=integer, nullable=true, comment=Optional.empty} (10:8)
+            Input: 10,000 rows (0B), Filtered: 0.00%",
