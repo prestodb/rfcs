@@ -67,9 +67,16 @@ OpenTelemetry maintains several official propagators. The default propagator is 
 Based on the discussion, this may need to be updated with feedback from reviewers.
 
 ## Adoption Plan
-Tracing providers can be implemented by extending the `Tracing Factory` interface in SPI module and provide the implementation.
+`BaseSpan` - SPI can be extended with the specific implementation which contains the actual SDK Span. BaseSpan propagates through the main presto code.
+`Tracer` - SPI for the span operations which can be implemented by specific serviceability framework.
+`TraceProvider` - SPI to supply different `Tracer` implementations.
 
-As of now we have one implementation for Open Telemetry can be configured by modifying the values in presto-main/etc/telemetry.properties
+`BaseSpan` introduced as part of new design. Hooks inside `Tracer` and `TraceProvider` is added/updated to match the design.
+`NoopTracer` removed as we have a default `Tracer` implementation in `presto-main/..tracing/DefaultTelemetryTracer`
+
+`Tracer` implementation get loaded by `PluginManager` at startup as before.
+
+Trace can be configured by modifying the values in presto-main/etc/telemetry-tracing.properties
 
 ```properties
 tracing-factory.name=otel
@@ -79,24 +86,27 @@ max-exporter-batch-size=256
 max-queue-size=1024
 schedule-delay=1000
 exporter-timeout=1024
+trace-sampling-ratio=1.0
 span-sampling=true
 ```
 
-***tracing-factory.name***: unique identifier for factory implementation to be registered
+***tracing-factory.name***: Unique identifier for factory implementation to be registered.
 
-***tracing-enabled***: boolean value controlling if tracing is on or off
+***tracing-enabled***: Boolean value controlling if tracing is on or off.
 
-***tracing-backend-url***: points to otel collector or backend for exporting telemetry data
+***tracing-backend-url***: Points to backend for exporting telemetry data.
 
-***max-exporter-batch-size***: maximum number of spans that will be exported in one batch
+***max-exporter-batch-size***: Maximum number of spans that will be exported in one batch.
 
-***max-queue-size***: maximum number of spans that can be queued before being processed for export
+***max-queue-size***: Maximum number of spans that can be queued before being processed for export.
 
-***schedule-delay***: delay between batches of span export, controlling how frequently spans are exported
+***schedule-delay***: Delay between batches of span export, controlling how frequently spans are exported.
 
-***exporter-timeout***: how long the span exporter will wait for a batch of spans to be successfully sent before timing out
+***exporter-timeout***: How long the span exporter will wait for a batch of spans to be successfully sent before timing out.
 
-***span-sampling***: boolean to enable/disable sampling. If enabled, spans are only generated for major operations
+***trace-sampling-ratio***: Double between 0.0 and 1.0 to specify the percentage of queries to be traced.
+
+***span-sampling***: Boolean to enable/disable sampling. If enabled, spans are only generated for major operations.
 
 ## Test Plan
 
