@@ -13,29 +13,31 @@ Proposers
 
 
 ## Summary
-The existing Open Telemetry implementation https://github.com/prestodb/presto/pull/18534 was an experimental feature, had a limited set of telemetry data(Query state changes) and did not include a child span concept. The recent implementation will make Presto more flexible, allowing support for both parent and child spans. Additionally, traces can now be propagated to the worker nodes as well.
+Presto's original tracing implementation was merged in https://github.com/prestodb/presto/pull/18534. It was an experimental feature, had a limited set of telemetry data, and did not include a child span concept. This document proposes an expansion to the tracing provider SPI to
+1. Support child spans in traces to make understanding nested operations simpler
+2. Allow traces to be propagated to workers so that the entire lifespan of a query can be traced from analysis through execution
 
 
 ## Background
-OpenTelemetry is a powerful serviceability framework that helps to gain insights into the performance and behaviour of the systems. It facilitates generation, collection, and management of telemetry data such as traces.
+TracerProvider/Tracer can be extended and implemented with serviceability frameworks. It facilitates generation, collection, and management of telemetry data such as traces.
 
 
-### Existing Open Telemetry
+### Existing implementation
 ![Traces existing implementation](/RFC-0011-open-telemetry/traces-existing-implementation-oss-presto.png)
 
 
-The OSS Presto had a basic implementation of Open Telemetry with few limitations listed below.
-- Have only less number of spans and covers only query state transitions like dispatching, planning, analyzing, and
-scheduling. ie. it does not cover most of the internal operations during a query execution.
-- No additional information is being passed as query attributes or events.
-- No correlation between traceId and queryId.
-- Does not identify failed queries
-- No context propagation to track worker nodes.
+Presto has a basic `TracerProvider` and `Tracer` interfaces which makes it difficult to implement the following desirable features:
+- Have only limited number of spans and covers only query state transitions like dispatching, planning, analyzing, and
+scheduling. ie. it does not cover most of the internal operations during a query execution(The implementation for methods startBlock and endBlock are based on Map and cannot be used to handle large number of spans as the span name can be same for many.).
+- No additional information is being passed as query attributes or events. No suitable methods in SPI to set events and attributes.
+- No correlation between traceId and queryId. No suitable methods in SPI to set queryId.
+- Does not identify failed queries. No suitable methods in SPI to pass Error/Exception information and deals with failed query spans.
+- No context propagation to track worker nodes. No methods in SPI supports this feature.
 
-## Proposed Implementation
-With additional changes to the OpenTelemetry SPI, we get the following advantages -
+## Proposed implementation
+With additional changes to the SPI, we get the following advantages -
 - Presto can be manually instrumented which gives more flexibility and control. Easier to customize what operations can be monitored.
-- More number of spans with parent and child span concept which helps to get the insight on internal operations.
+- Traces with parent and child span concept which helps to get the insight on internal operations.
 - Able to pass queryId as attribute so that traces and query get connected each other.
 - Can identify failed queries and filter it out.
 - Ability to pass additional information as span attributes and events.
@@ -50,6 +52,7 @@ With additional changes to the OpenTelemetry SPI, we get the following advantage
 ![Instrumentation flow](/RFC-0011-open-telemetry/tracing-instrumentation-flow.png)
 - Here the Open Telemetry SDK provides libraries and API's for instrumenting the applications.
 - Backend is a system to store, analyse and visualize this telemetry data. Common backends include systems like Jaeger, Instana, Grafana stack, etc.
+- add attributes and events, extract context and start child span , check flush trigger and export span batches are additions to the existing flow.
 
 
 ### Context propagation from Coordinator to Worker
@@ -76,22 +79,22 @@ Based on the discussion, this may need to be updated with feedback from reviewer
 
 ## Adoption Plan
 ### SPI Changes
+#### Additions
 ```java
 class BaseSpan {}
 ```
 SPI can be extended with the specific implementation which contains the actual SDK Span. BaseSpan propagates through the main presto code. Introduced as part of new design.
 
-#### Additions
 ```java
-default void close()
-{
-    return;
-}
+  default void close()
+  {
+      return;
+  }
 
-default void end()
-{
-    return;
-}
+    default void end()
+  {
+      return;
+  }
 ```
 
 
@@ -100,32 +103,114 @@ class Tracer {}
 ```
 SPI for the span operations which can be implemented by specific serviceability framework.
 
-#### Additions
 ```java
-void loadConfiguredOpenTelemetry();
-Runnable getCurrentContextWrap(Runnable runnable);
-boolean isRecording();
-Map<String, String> getHeadersMap(T span);
-void endSpanOnError(T querySpan, Throwable throwable);
-void addEvent(T span, String eventName);
-void setAttributes(T span, Map<String, String> attributes);
-void recordException(T span, String message, RuntimeException runtimeException, ErrorCode errorCode);
-void setSuccess(T span);
-T getInvalidSpan();
-T getRootSpan(String traceId);
-T getSpan(String spanName);
-U scopedSpan(String name, Boolean... skipSpan);
-Optional<String> spanString(T span);
-```
+  /**
+   * Instantiates required Telemetry instances after loading the plugin implementation.
+   */
+  void loadConfiguredTelemetry();
 
-#### Deletions
-```java
-String tracerName = "com.facebook.presto";
-void addPoint(String annotation);
-void startBlock(String blockName, String annotation);
-void addPointToBlock(String blockName, String annotation);
-void endBlock(String blockName, String annotation);
-void endTrace(String annotation);
+  /**
+   * Gets current context wrap.
+   *
+   * @param runnable the runnable
+   * @return the current context wrap
+   */
+  Runnable getCurrentContextWrap(Runnable runnable);
+
+  /**
+   * Returns true if this Span records tracing events.
+   *
+   * @return the boolean
+   */
+  boolean isRecording();
+
+  /**
+   * Returns headers map from the input span.
+   *
+   * @param span the span
+   * @return the headers map
+   */
+  Map<String, String> getHeadersMap(T span);
+
+  /**
+   * Ends span by updating the status to error and record input exception.
+   *
+   * @param querySpan the query span
+   * @param throwable the throwable
+   */
+  void endSpanOnError(T querySpan, Throwable throwable);
+
+  /**
+   * Add the input event to the input span.
+   *
+   * @param span      the span
+   * @param eventName the event name
+   */
+  void addEvent(T span, String eventName);
+
+  /**
+   * Sets the attributes map to the input span.
+   *
+   * @param span       the span
+   * @param attributes the attributes
+   */
+  void setAttributes(T span, Map<String, String> attributes);
+
+  /**
+   * Records exception to the input span with error code and message.
+   *
+   * @param span        the query span
+   * @param message          the message
+   * @param runtimeException the runtime exception
+   * @param errorCode        the error code
+   */
+  void recordException(T span, String message, RuntimeException runtimeException, ErrorCode errorCode);
+
+  /**
+   * Sets the status of the input span to success.
+   *
+   * @param span the query span
+   */
+  void setSuccess(T span);
+
+  /**
+   * Returns an invalid Span. An invalid Span is used when tracing is disabled.
+   *
+   * @return the invalid span
+   */
+  T getInvalidSpan();
+
+  /**
+   * Creates and returns the root span.
+   *
+   * @return the root span
+   */
+  T getRootSpan(String traceId);
+
+  /**
+   * Creates and returns the span with input name.
+   *
+   * @param spanName the span name
+   * @return the span
+   */
+  T getSpan(String spanName);
+
+  /**
+   * Creates and returns the ScopedSpan with input name.
+   *
+   * @param name     the name
+   * @param skipSpan the skip span
+   * @return the u
+   */
+  U scopedSpan(String name, Boolean... skipSpan);
+
+  /**
+   * Returns the span info as string.
+   *
+   * @param span the span
+   * @return the optional
+   */
+  Optional<String> spanString(T span);
 ```
 
 
@@ -134,54 +219,71 @@ class TraceProvider {}
 ```
 SPI to supply different Tracer implementations.
 
-#### Additions
 ```java
-T create();
+  T create();
 ```
 
 #### Deletions
 ```java
-String getTracerType();
-Function<Map<String, String>, TracerHandle> getHandleGenerator();
-Tracer getNewTracer(TracerHandle handle);
+class Tracer {}
 ```
+
+```java
+  String tracerName = "com.facebook.presto";
+  void addPoint(String annotation);
+  void startBlock(String blockName, String annotation);
+  void addPointToBlock(String blockName, String annotation);
+  void endBlock(String blockName, String annotation);
+  void endTrace(String annotation);
+```
+
+
+```java
+class TraceProvider {}
+```
+
+```java
+  String getTracerType();
+  Function<Map<String, String>, TracerHandle> getHandleGenerator();
+  Tracer getNewTracer(TracerHandle handle);
+```
+
 
 ```java
 class NoopTracer {}
 ```
 Removed as we have a default Tracer implementation in presto-main/..tracing/DefaultTelemetryTracer
 
-#### Deletions
 ```java
-public void addPoint(String annotation)
-{
-}
+  public void addPoint(String annotation)
+  {
+  }
 
-@Override
-public void startBlock(String blockName, String annotation)
-{
-}
+  @Override
+  public void startBlock(String blockName, String annotation)
+  {
+  }
 
-@Override
-public void addPointToBlock(String blockName, String annotation)
-{
-}
+  @Override
+  public void addPointToBlock(String blockName, String annotation)
+  {
+  }
 
-@Override
-public void endBlock(String blockName, String annotation)
-{
-}
-
-@Override
-public void endTrace(String annotation)
-{
-}
-
-@Override
-public String getTracerId()
-{
-    return "noop_dummy_id";
-}
+  @Override
+  public void endBlock(String blockName, String annotation)
+  {
+  }
+  
+  @Override
+  public void endTrace(String annotation)
+  {
+  }
+  
+  @Override
+  public String getTracerId()
+  {
+      return "noop_dummy_id";
+  }
 ```
 
 
@@ -190,14 +292,24 @@ class TracerHandle {}
 ```
 Removed as not required for the current implementation.
 
-#### Deletions
 ```java
-String getTraceToken();
+  String getTraceToken();
 ```
 
 
 ### Configuration
-Trace can be configured by modifying the values in presto-main/etc/telemetry-tracing.properties
+#### Existing configuration
+In the current Presto Telemetry can be configured by adding the below keys and values(Example) in presto-main/etc/config.properties
+
+```properties
+tracing.tracer-type=otel
+tracing.enable-distributed-tracing=true
+tracing.distributed-tracing-mode=ALWAYS_TRACE
+```
+
+
+#### New configuration
+In the latest implementation trace can be configured by modifying the values in presto-main/etc/telemetry-tracing.properties
 
 ```properties
 tracing-factory.name=otel
