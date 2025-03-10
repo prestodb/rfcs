@@ -31,7 +31,7 @@ Presto has a basic `TracerProvider` and `Tracer` interfaces which makes it diffi
 scheduling. ie. it does not cover most of the internal operations during a query execution(The implementation for methods startBlock and endBlock are based on Map and cannot be used to handle large number of spans as the span name can be same for many.).
 - No additional information is being passed as query attributes or events. No suitable methods in SPI to set events and attributes.
 - No correlation between traceId and queryId. No suitable methods in SPI to set queryId.
-- Does not identify failed queries. No suitable methods in SPI to pass Error/Exception information and deals with failed query spans.
+- Does not identify failed queries. No suitable methods in SPI to pass Error/Exception information to the failed query spans.
 - No context propagation to track worker nodes. No methods in SPI supports this feature.
 
 ## Proposed implementation
@@ -80,220 +80,228 @@ Based on the discussion, this may need to be updated with feedback from reviewer
 ## Adoption Plan
 ### SPI Changes
 #### Additions
-```java
-class BaseSpan {}
-```
-SPI can be extended with the specific implementation which contains the actual SDK Span. BaseSpan propagates through the main presto code. Introduced as part of new design.
 
 ```java
+/**
+ * SPI can be extended with the specific implementation which contains the actual SDK Span. BaseSpan propagates through the main presto code. Introduced as part of new design.
+ */
+public interface BaseSpan
+        extends AutoCloseable
+{
+  @Override
   default void close()
   {
-      return;
+    return;
   }
 
-    default void end()
+  default void end()
   {
-      return;
+    return;
   }
-```
-
-
-```java
-class Tracer {}
-```
-SPI for the span operations which can be implemented by specific serviceability framework.
-
-```java
-  /**
-   * Instantiates required Telemetry instances after loading the plugin implementation.
-   */
-  void loadConfiguredTelemetry();
-
-  /**
-   * Gets current context wrap.
-   *
-   * @param runnable the runnable
-   * @return the current context wrap
-   */
-  Runnable getCurrentContextWrap(Runnable runnable);
-
-  /**
-   * Returns true if this Span records tracing events.
-   *
-   * @return the boolean
-   */
-  boolean isRecording();
-
-  /**
-   * Returns headers map from the input span.
-   *
-   * @param span the span
-   * @return the headers map
-   */
-  Map<String, String> getHeadersMap(T span);
-
-  /**
-   * Ends span by updating the status to error and record input exception.
-   *
-   * @param querySpan the query span
-   * @param throwable the throwable
-   */
-  void endSpanOnError(T querySpan, Throwable throwable);
-
-  /**
-   * Add the input event to the input span.
-   *
-   * @param span      the span
-   * @param eventName the event name
-   */
-  void addEvent(T span, String eventName);
-
-  /**
-   * Sets the attributes map to the input span.
-   *
-   * @param span       the span
-   * @param attributes the attributes
-   */
-  void setAttributes(T span, Map<String, String> attributes);
-
-  /**
-   * Records exception to the input span with error code and message.
-   *
-   * @param span        the query span
-   * @param message          the message
-   * @param runtimeException the runtime exception
-   * @param errorCode        the error code
-   */
-  void recordException(T span, String message, RuntimeException runtimeException, ErrorCode errorCode);
-
-  /**
-   * Sets the status of the input span to success.
-   *
-   * @param span the query span
-   */
-  void setSuccess(T span);
-
-  /**
-   * Returns an invalid Span. An invalid Span is used when tracing is disabled.
-   *
-   * @return the invalid span
-   */
-  T getInvalidSpan();
-
-  /**
-   * Creates and returns the root span.
-   *
-   * @return the root span
-   */
-  T getRootSpan(String traceId);
-
-  /**
-   * Creates and returns the span with input name.
-   *
-   * @param spanName the span name
-   * @return the span
-   */
-  T getSpan(String spanName);
-
-  /**
-   * Creates and returns the ScopedSpan with input name.
-   *
-   * @param name     the name
-   * @param skipSpan the skip span
-   * @return the u
-   */
-  U scopedSpan(String name, Boolean... skipSpan);
 
   /**
    * Returns the span info as string.
    *
-   * @param span the span
    * @return the optional
    */
-  Optional<String> spanString(T span);
+  default Optional<String> spanString()
+  {
+    return Optional.empty();
+  }
+}
 ```
 
 
 ```java
-class TraceProvider {}
+/**
+ * SPI for the span operations which can be implemented by the required serviceability framework.
+ *
+ * @param <T> the type parameter
+ * @param <U> the type parameter
+ */
+public interface Tracer<T extends BaseSpan, U extends BaseSpan>
+{
+    /**
+     * Gets current context wrap.
+     *
+     * @param runnable the runnable
+     * @return the current context wrap
+     */
+    Runnable getCurrentContextWrap(Runnable runnable);
+
+    /**
+     * Returns true if this Span records tracing events.
+     *
+     * @return the boolean
+     */
+    boolean isRecording();
+
+    /**
+     * Returns headers map from the input span.
+     *
+     * @param span the span
+     * @return the headers map
+     */
+    Map<String, String> getHeadersMap(T span);
+
+    /**
+     * Ends span by updating the status to error and record input exception.
+     *
+     * @param querySpan the query span
+     * @param throwable the throwable
+     */
+    void endSpanOnError(T querySpan, Throwable throwable);
+
+    /**
+     * Add the input event to the input span.
+     *
+     * @param span      the span
+     * @param event the event name
+     */
+    void addEvent(T span, Event event);
+
+    /**
+     * Sets the attributes map to the input span.
+     *
+     * @param span       the span
+     * @param attributes the attributes
+     */
+    void setAttributes(T span, Map<String, String> attributes);
+
+    /**
+     * Sets the status of the input span to success.
+     *
+     * @param span the query span
+     */
+    void setSuccess(T span);
+
+    /**
+     * Returns an invalid Span. An invalid Span is used when tracing is disabled.
+     *
+     * @return the invalid span
+     */
+    T getInvalidSpan();
+
+    /**
+     * Creates and returns the root span.
+     *
+     * @return the root span
+     */
+    T getRootSpan(String traceId);
+
+    /**
+     * Creates and returns the span with input name.
+     *
+     * @param spanName the span name
+     * @return the span
+     */
+    T getSpan(String spanName);
+
+    /**
+     * Creates and returns the ScopedSpan with input name.
+     *
+     * @param name     the name
+     * @param skipSpan the skip span
+     * @return the u
+     */
+    U scopedSpan(String name, Boolean... skipSpan);
+}
 ```
-SPI to supply different Tracer implementations.
+
 
 ```java
-  T create();
+/**
+ * SPI to supply different Tracer implementations.
+ *
+ * @param <T> the type parameter
+ */
+public interface TracerProvider<T>
+{
+    T create();
+}
 ```
+
 
 #### Deletions
-```java
-class Tracer {}
-```
 
 ```java
-  String tracerName = "com.facebook.presto";
-  void addPoint(String annotation);
-  void startBlock(String blockName, String annotation);
-  void addPointToBlock(String blockName, String annotation);
-  void endBlock(String blockName, String annotation);
-  void endTrace(String annotation);
-```
+public interface Tracer
+{
+    String tracerName = "com.facebook.presto";
 
+    void addPoint(String annotation);
 
-```java
-class TraceProvider {}
-```
+    void startBlock(String blockName, String annotation);
 
-```java
-  String getTracerType();
-  Function<Map<String, String>, TracerHandle> getHandleGenerator();
-  Tracer getNewTracer(TracerHandle handle);
+    void addPointToBlock(String blockName, String annotation);
+
+    void endBlock(String blockName, String annotation);
+
+    void endTrace(String annotation);
+}
 ```
 
 
 ```java
-class NoopTracer {}
-```
-Removed as we have a default Tracer implementation in presto-main/..tracing/DefaultTelemetryTracer
+public interface TraceProvider
+{
+    String getTracerType();
 
-```java
-  public void addPoint(String annotation)
-  {
-  }
+    Function<Map<String, String>, TracerHandle> getHandleGenerator();
 
-  @Override
-  public void startBlock(String blockName, String annotation)
-  {
-  }
-
-  @Override
-  public void addPointToBlock(String blockName, String annotation)
-  {
-  }
-
-  @Override
-  public void endBlock(String blockName, String annotation)
-  {
-  }
-  
-  @Override
-  public void endTrace(String annotation)
-  {
-  }
-  
-  @Override
-  public String getTracerId()
-  {
-      return "noop_dummy_id";
-  }
+    Tracer getNewTracer(TracerHandle handle);
+}
 ```
 
 
 ```java
-class TracerHandle {}
+/**
+ * Removed as we have a default Tracer implementation in presto-main/..tracing/DefaultTelemetryTracer
+ *
+ */
+public interface NoopTracer
+{
+    public void addPoint(String annotation) {
+    }
+
+    @Override
+    public void startBlock(String blockName, String annotation) {
+    }
+
+    @Override
+    public void addPointToBlock(String blockName, String annotation) {
+    }
+
+    @Override
+    public void endBlock(String blockName, String annotation) {
+    }
+
+    @Override
+    public void endTrace(String annotation) {
+    }
+
+    @Override
+    public String getTracerId() {
+        return "noop_dummy_id";
+    }
+}
 ```
-Removed as not required for the current implementation.
+
 
 ```java
-  String getTraceToken();
+
+```
+
+
+```java
+/**
+ * Removed as not required for the current implementation.
+ *
+ */
+public interface TracerHandle
+{
+    String getTraceToken();
+}
 ```
 
 
