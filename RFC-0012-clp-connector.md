@@ -17,7 +17,7 @@ Proposers
 
 ## Summary
 
-We propose adding a connector and one or more UDFs to query specially-compressed schemaless log data directly through Presto and Prestissimo via a schema-oriented interface. Several users generate petabytes of log data per day and wish to store and query it efficiently. [CLP] is an open-source log management system that can significantly compress this log data and efficiently query it without full decompression. A Presto connector for CLP would allow Presto users to efficiently query their log data and correlate it with other data sources.
+We propose adding a connector and a handful of UDFs to query specially-compressed schemaless log data directly through Presto and Prestissimo via a schema-oriented interface. Several users generate petabytes of log data per day and wish to store and query it efficiently. [CLP] is an open-source log management system that can significantly compress this log data and efficiently query it without full decompression. A Presto connector for CLP would allow Presto users to efficiently query their log data and correlate it with other data sources.
 
 ## Background
 
