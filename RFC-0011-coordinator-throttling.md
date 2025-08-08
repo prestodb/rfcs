@@ -68,7 +68,7 @@ For immediate relief, we propose implementing a holistic admission control mecha
   - PR: https://github.com/prestodb/presto/pull/25688 
 #### Scheduling policies
   - Implement node overload policies that can govern the policies to determine cluster overload
-  - Based on these policies and load collected from worker, improve the admission control logic globally to not queue the query (irrespective of Resource Group)
+  - Based on these policies and load collected from worker, improve the admission control logic globally to queue the query (irrespective of Resource Group)
   - PR: https://github.com/prestodb/presto/pull/25689 
 
 
@@ -110,8 +110,22 @@ Two brains
 
 
 ## Adoption Plan
-If this feature is enabled, this can cause queuing when cluster is loaded (which would be separate from queuing due to Resource Groups)
-. For now end users can correlate queuing via looking at queuing + worker overload metrics together. If required, we can also expose separate queuing metrics due to cluster overload.
+Enabling this feature can cause additional queuing when the cluster is overloaded (which would be separate from queuing due to Resource Groups).
+We will add following metrics to know if this feature has caused queueing
+
+- Overload throttling state in UI
+- Separate Metrics for queuing due to cluster overload 
+
+
+
 ## Test Plan
-Added the test cases
-Also added via simulating the workload
+Added the unit test cases
+E2E Test
+
+- Caused overload on few workers and observed that if I enable the feature the load converges faster
+vs not. Below is a graph showing  load hovering to a constant state if we keep admitting queries vs load getting
+reduced if we stop admitting the queries. In this case the policy was to not allow any worker to be overloaded.
+
+Load Graph
+![Design diagram](RFC-0011/load.png)
+
