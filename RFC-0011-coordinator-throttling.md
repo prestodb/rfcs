@@ -117,16 +117,17 @@ We will add following metrics to know if this feature has caused queueing
 - Separate Metrics for queuing due to cluster overload 
 
 
-
 ## Test Plan
-Added the unit test cases
-- Mocked the internalNodeManager with different load factors. Mocked different overload policies and verified that the throttling workws as intended 
+**Unit test cases**
+- Mocked the InternalNodeManager with different load factors. Mocked different overload policies and verified that the throttling works as intended 
 
-E2E Test
+**E2E Test**
 
-- Caused overload on few workers and observed that if I enable the feature the load converges faster
-vs not. Below is a graph showing  load hovering to a constant state if we keep admitting queries vs load getting
-reduced if we stop admitting the queries. In this case the policy was to not allow any worker to be overloaded.
+- The graph below illustrates two scenarios
+  - When queries continue to be admitted, the load stabilizes at a constant level.
+  - When query admission is halted, the system load gradually decreases.
+
+- In these experiments, the policy enforced was that no worker should be allowed to become overloaded.
 
 Load Graph
 ![Design diagram](RFC-0011/load.png)
