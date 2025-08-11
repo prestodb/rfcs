@@ -58,24 +58,44 @@ For immediate relief, we propose implementing a holistic admission control mecha
 ## Proposed Implementation
 ### Worker side changes
 - Added endpoint to gather worker load (`/v1/info/nodestats`)
-  - Include NodeState + worker load. Idea is to just call `/v1/info/nodestats` rather than `/v1/info/state` (eventually deprecate it). Worker load is already getting populated in [cpp workers](https://github.com/prestodb/presto/blob/master/presto-native-execution/presto_cpp/main/PrestoServer.cpp#L1537).  
-- PR: https://github.com/prestodb/presto/pull/25686
+  - Include NodeState + worker load. Idea is to just call `/v1/info/nodestats` rather than `/v1/info/state` (eventually deprecate it). Worker load is already getting populated in [cpp workers](https://github.com/prestodb/presto/blob/master/presto-native-execution/presto_cpp/main/PrestoServer.cpp#L1537).
+  - **Fields**
+    - **nodeState** [Code link](https://github.com/prestodb/presto/blob/master/presto-spi/src/main/java/com/facebook/presto/spi/NodeState.java)  
+    - **metrics**
+      - Map<String, Double> loadMetrics
+        - key is overload state like `cpu.overload`, `memory.overload`
+        - val is 0 or 1 to indicate overload or not
+  - **Sample response**
+    - curl <worker_host>/v1/info/nodestate
+      - Response: ```{"metrics":{"cpu.overload":0.0,"memory.overload":0.0},"nodeState":"ACTIVE"}```
+- POC PR: https://github.com/prestodb/presto/pull/25686 (cpp)
+- POC PR : https://github.com/prestodb/presto/pull/25687 (java)
 
 ### Coordinator side changes
 #### Collecting worker load data
   - Update DiscoveryManager to invoke this end point rather than the `/v1/info/state`
   - Expose `getNodeLoadMetrics` on InternalNodeManager
-  - PR: https://github.com/prestodb/presto/pull/25688 
+  - POC PR: https://github.com/prestodb/presto/pull/25688 
 #### Scheduling policies
   - Implement node overload policies that can govern the policies to determine cluster overload
   - Based on these policies and load collected from worker, improve the admission control logic globally to queue the query (irrespective of Resource Group)
-  - PR: https://github.com/prestodb/presto/pull/25689 
+  - Load Determination
+    - Each worker is determining if it is overloaded according to the code and the config parameters. Overload is mainly based on cpu and memory threshold
+      and configured in the worker properties. Coordinator is merely notified if the worker has memory or CPU overload at the time of reporting. In cpp worker this is the PR which introduced the [overload](https://github.com/prestodb/presto/pull/24949/files).
+      For Java worker, the current plan is not to include loadMetrics and just return nodeState to keep it compatible.
+  - POC PR: https://github.com/prestodb/presto/pull/25689
 
 
 ## Metrics
 
-- Cluster overload
+- Cluster overload. Added few JMX metrics:
+  - **ClusterOverloadState** (Binary state)
+  - **OverloadDetectionCount** (Cumulative)
+  - **OverloadDuration** (Total time elapsed since cluster is overloaded)
+
 - Variance in runtime of queries
+  - **Cluster Overload Patterns:** We have identified clusters experiencing consistent overload patterns that cause significant variation in query runtime performance.
+  - **Measurement Strategy:** We will measure end-to-end execution time improvements after implementing query admission controls to reduce the overall query load using this feature.
 
 
 ## Other Approaches Considered
