@@ -83,7 +83,7 @@ In this RFC, we propose a comprehensive admission control mechanism that enables
   - Expose `getNodeLoadMetrics` on InternalNodeManager
 
 #### Scheduling policies
-  - **Node overload policies** that can govern the policies to determine cluster overload. Based on these policies and load collected from worker, improve the admission control logic globally to queue the query (irrespective of Resource Group)
+  - **Node overload policies** that can govern the policies to determine cluster overload. Based on these policies and load collected from worker, improve the admission control logic globally to selectively admit the query based on query configs.
   - **Load Determination**
     - The coordinator will analyze the raw metrics to assess whether a worker is overloaded. Using configuration properties, it will then determine if the entire cluster is overloaded by aggregating the overload status of individual workers.
 #### Query configs
