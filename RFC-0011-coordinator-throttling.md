@@ -62,10 +62,10 @@ For immediate relief, we propose implementing a holistic admission control mecha
   - **Fields**
     - **nodeState** [Code link](https://github.com/prestodb/presto/blob/master/presto-spi/src/main/java/com/facebook/presto/spi/NodeState.java)  
     - **loadMetrics**
-    - This will be an object comprising fields such as cpu_used_pct, mem_used_in_bytes, and other raw metrics reported from the worker. The design is intended to be extensible for both the worker and the coordinator components:
-      - On the **worker side**, users may add metrics that are most relevant to their specific cluster.
-      - On the **coordinator side**, users have the flexibility to override the NodeOverloadPolicy to define worker load criteria and enhance admission control.
-    - **Note:** To support the version 1 use case of Meta, additional fields cpu_overload and mem_overload will be included, representing overload information as determined by the worker namely cpu_overload, memory_overload.
+      - This will be an object comprising fields such as **cpu_used_pct**, **memory_used_in_bytes**, and other raw metrics reported from the worker. The design is intended to be extensible for both the worker and the coordinator components:
+        - On the **worker side**, users may add metrics that are most relevant to their specific cluster.
+        - On the **coordinator side**, users have the flexibility to override the **NodeOverloadPolicy** interface to determine worker load criteria and enhance admission control.
+      - **Note:** To support the version 1 use case of Meta, additional fields cpu_overload and mem_overload will be included, representing overload information as determined by the worker namely cpu_overload, memory_overload.
   - **Sample response**
     - curl <worker_host>/v1/info/nodestate
       - Response: ```{"loadMetrics":{"cpu_used_pct":0.76,"memory_used_in_bytes":12222340, "cpu_overload": 1.0, "memory_overload": 0.0},"nodeState":"ACTIVE"}```
@@ -74,7 +74,7 @@ For immediate relief, we propose implementing a holistic admission control mecha
 #### Collecting worker load data
   - Update DiscoveryManager to invoke this end point rather than the `/v1/info/state`
   - Expose `getNodeLoadMetrics` on InternalNodeManager
-  - POC PR: https://github.com/prestodb/presto/pull/25688 
+
 #### Scheduling policies
   - **Node overload policies** that can govern the policies to determine cluster overload. Based on these policies and load collected from worker, improve the admission control logic globally to queue the query (irrespective of Resource Group)
   - **Load Determination**
