@@ -61,15 +61,14 @@ For immediate relief, we propose implementing a holistic admission control mecha
   - Include NodeState + worker load. Idea is to just call `/v1/info/nodestats` rather than `/v1/info/state` (eventually deprecate it). Worker load is already getting populated in [cpp workers](https://github.com/prestodb/presto/blob/master/presto-native-execution/presto_cpp/main/PrestoServer.cpp#L1537).
   - **Fields**
     - **nodeState** [Code link](https://github.com/prestodb/presto/blob/master/presto-spi/src/main/java/com/facebook/presto/spi/NodeState.java)  
-    - **metrics**
-      - Map<String, Double> loadMetrics
-        - key is overload state like `cpu.overload`, `memory.overload`
-        - val is 0 or 1 to indicate overload or not
+    - **loadMetrics**
+    - This will be an object comprising fields such as cpu_used_pct, mem_used_in_bytes, and other raw metrics reported from the worker. The design is intended to be extensible for both the worker and the coordinator components:
+      - On the **worker side**, users may add metrics that are most relevant to their specific cluster.
+      - On the **coordinator side**, users have the flexibility to override the NodeOverloadPolicy to define worker load criteria and enhance admission control.
+    - **Note:** To support the version 1 use case of Meta, additional fields cpu_overload and mem_overload will be included, representing overload information as determined by the worker namely cpu_overload, memory_overload.
   - **Sample response**
     - curl <worker_host>/v1/info/nodestate
-      - Response: ```{"metrics":{"cpu.overload":0.0,"memory.overload":0.0},"nodeState":"ACTIVE"}```
-- POC PR: https://github.com/prestodb/presto/pull/25686 (cpp)
-- POC PR : https://github.com/prestodb/presto/pull/25687 (java)
+      - Response: ```{"loadMetrics":{"cpu_used_pct":0.76,"memory_used_in_bytes":12222340, "cpu_overload": 1.0, "memory_overload": 0.0},"nodeState":"ACTIVE"}```
 
 ### Coordinator side changes
 #### Collecting worker load data
@@ -77,13 +76,12 @@ For immediate relief, we propose implementing a holistic admission control mecha
   - Expose `getNodeLoadMetrics` on InternalNodeManager
   - POC PR: https://github.com/prestodb/presto/pull/25688 
 #### Scheduling policies
-  - Implement node overload policies that can govern the policies to determine cluster overload
-  - Based on these policies and load collected from worker, improve the admission control logic globally to queue the query (irrespective of Resource Group)
-  - Load Determination
-    - Each worker is determining if it is overloaded according to the code and the config parameters. Overload is mainly based on cpu and memory threshold
-      and configured in the worker properties. Coordinator is merely notified if the worker has memory or CPU overload at the time of reporting. In cpp worker this is the PR which introduced the [overload](https://github.com/prestodb/presto/pull/24949/files).
-      For Java worker, the current plan is not to include loadMetrics and just return nodeState to keep it compatible.
-  - POC PR: https://github.com/prestodb/presto/pull/25689
+  - **Node overload policies** that can govern the policies to determine cluster overload. Based on these policies and load collected from worker, improve the admission control logic globally to queue the query (irrespective of Resource Group)
+  - **Load Determination**
+    - The coordinator will analyze the raw metrics to assess whether a worker is overloaded. Using configuration properties, it will then determine if the entire cluster is overloaded by aggregating the overload status of individual workers.
+#### Query configs
+  - We will also introduce query configurations to allow flexibility in admitting relatively lightweight queries. For example, even when the cluster is fully loaded, DDL queries should still be permitted to run.
+    
 
 
 ## Metrics
@@ -101,6 +99,26 @@ For immediate relief, we propose implementing a holistic admission control mecha
 ## Other Approaches Considered
 
 ### Approach 1
+Improve the resource group accounting to include metrics that actually cause overload
+Current limitations
+- CPU is not considered correctly for throttling
+- Memory is not accounted correctly on Velox
+
+We should add the relevant metrics that cause overload in RG configs and improve throttling
+
+- **Pros**
+  - RG throttling code could be reused
+  - More fair to throttle workloads which are actually overloading
+
+- **Cons**
+  - Needs significant work on worker side
+  - Also need work on coordinator side
+
+**Based on learnings of key metrics that matter, we would could improve admission control and would be extension of this RFC**
+
+
+
+### Approach 2
 #### Improve Granular task scheduling
 Not fully baked, but at high-level based on load, the coordinator can assign scores to the workers and selects the top N highest-scoring workers, then randomly chooses from this subset to schedule tasks or splits.
 
@@ -118,7 +136,7 @@ In our cluster most of the workers become overloaded in a fraction of minutes du
 Load balancing may not be immediately helpful in such cases
 This could be a good direction for the future if we see only a select few workers are causing issues.
 
-### Approach 2
+### Approach 3
 Write a separate service which can consume worker load and update global RG (max queries that can run based on the load / policies)
 
 - **Pros**
