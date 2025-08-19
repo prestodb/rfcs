@@ -69,7 +69,7 @@ In this RFC, we propose a comprehensive admission control mechanism that enables
       - This will be an object comprising fields such as **cpuUsedPercent**, **memoryUsedInBytes**, and other raw metrics reported from the worker. The design is intended to be extensible for both the worker and the coordinator components:
         - On the **worker side**, users may add metrics that are most relevant to their specific cluster.
         - On the **coordinator side**, users have the flexibility to override the **NodeOverloadPolicy** interface to determine worker load criteria and enhance admission control.
-      - **Note:** To support the version 1 use case of Meta, additional fields cpu_overload and mem_overload will be included, representing overload information as determined by the worker namely cpu_overload, memory_overload.
+      - **Note:** To support the version 1 use case of Meta, additional fields **cpuOverload** and **memoryOverload** will be included, representing overload information as determined by the worker namely cpu_overload, memory_overload.
   - **Sample response**
     - curl <worker_host>/v1/info/nodestate
       - Response: ```{"loadMetrics":{"cpuUsedPercent":0.76,"memoryUsedInBytes":12222340, "cpuOverload": true, "memoryOverload": false},"nodeState":"ACTIVE"}```
