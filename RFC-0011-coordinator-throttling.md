@@ -12,7 +12,7 @@ A cluster is considered overloaded based on aggregated metrics reported by its u
 
 These metrics can include CPU utilization, memory usage, and task queue lengths. By analyzing this aggregated information, the system can make informed decisions about the cluster’s current load status.
 The exact criteria used to determine overload are governed by customizable and extensible policies. For example, a policy might specify that a cluster is overloaded if a certain percentage or number of worker nodes reach critical resource thresholds (“run hot”).
-In our case, most of the workers get overloaded within a matter of few mins
+In our case, most of the workers get overloaded within a matter of few minutes.
 
 A sample graph of clusters running hot. All the workers are running hot in this case.
 
@@ -43,13 +43,17 @@ While this approach is generally effective for distributing work, it may not alw
 For intermediate task scheduling in Presto, the selection of workers is based on a hash partition count. Specifically, intermediate tasks are assigned to worker nodes according to the hash of the partition, which determines the distribution across available intermediate workers. The relevant code implementation can be found [here](https://github.com/prestodb/presto/blob/master/presto-main-base/src/main/java/com/facebook/presto/sql/planner/SystemPartitioningHandle.java#L164).
 This strategy does not consider the current system load when assigning intermediate tasks. 
 
+While we could improve task scheduling (pro-active measure to not let worker overload) through load balancing (more on this in alternative approaches), this alone would be insufficient given the nature of our overload scenario where all workers are saturated in short period of time which is due to admitting lot of heavy queries in short duration of time.
+
 #### Resource Group throttling
-There are certain metrics like softMemoryLimit etc which exist at RG level to queue the workload, but it does not consider the actual utilization and is out of scope for this discussion.
+There are certain utilization metrics, such as softMemoryLimit, that exist at the Resource Group (RG) level for admission control. We have conducted a detailed analysis and identified several non-trivial limitations.
+Current Limitations
+- CPU Throttling: CPU usage is not accurately considered for throttling. Currently, there is no runtime throttling for CPU; aggregation occurs only after the query completes. Additionally, the existing load balancing logic for CPU does not strictly account for real-time usage.
+- Memory Attribution on Velox: Memory usage is not correctly accounted for or attributed. Unaccounted memory arises from libraries with their own allocators, including the HTTP layer (proxygen), warm storage libraries (or other readers), and system libraries that may copy data from the network into buffers that we subsequently read. Attributing this memory usage to specific tasks or queries is challenging.
 
+Addressing these issues requires non-trivial changes, but this could be a potential improvement to this RFC as documented in Approach-1
 
-While we could improve task scheduling (pro-active measure to not let worker overload) through load balancing (more on this in alternative approaches), this alone would be insufficient given the nature of our overload scenario where all workers are saturated in short period of time which is due to admitting lot of heavy queries in short duration of time. 
-
-For immediate relief, we propose implementing a holistic admission control mechanism that provides reactive throttling of the overall workload by not admitting queries.
+In this RFC, we propose a comprehensive admission control mechanism that enables reactive throttling of the overall workload by selectively admitting queries without entwining with any RG level changes.
 
 ### Goals
 - Decrease duration of overload on the cluster
@@ -57,18 +61,21 @@ For immediate relief, we propose implementing a holistic admission control mecha
 
 ## Proposed Implementation
 ### Worker side changes
-- Added endpoint to gather worker load (`/v1/info/nodestats`)
-  - Include NodeState + worker load. Idea is to just call `/v1/info/nodestats` rather than `/v1/info/state` (eventually deprecate it). Worker load is already getting populated in [cpp workers](https://github.com/prestodb/presto/blob/master/presto-native-execution/presto_cpp/main/PrestoServer.cpp#L1537).
+- Added endpoint to gather worker load (`/v1/info/stats`)
+  - Include NodeState + worker load. Idea is to just call `/v1/info/stats` rather than `/v1/info/state` (eventually deprecate it). Worker load is already getting populated in [cpp workers](https://github.com/prestodb/presto/blob/master/presto-native-execution/presto_cpp/main/PrestoServer.cpp#L1537).
   - **Fields**
     - **nodeState** [Code link](https://github.com/prestodb/presto/blob/master/presto-spi/src/main/java/com/facebook/presto/spi/NodeState.java)  
     - **loadMetrics**
-      - This will be an object comprising fields such as **cpu_used_pct**, **memory_used_in_bytes**, and other raw metrics reported from the worker. The design is intended to be extensible for both the worker and the coordinator components:
+      - This will be an object comprising fields such as **cpuUsedPercent**, **memoryUsedInBytes**, and other raw metrics reported from the worker. The design is intended to be extensible for both the worker and the coordinator components:
         - On the **worker side**, users may add metrics that are most relevant to their specific cluster.
         - On the **coordinator side**, users have the flexibility to override the **NodeOverloadPolicy** interface to determine worker load criteria and enhance admission control.
       - **Note:** To support the version 1 use case of Meta, additional fields cpu_overload and mem_overload will be included, representing overload information as determined by the worker namely cpu_overload, memory_overload.
   - **Sample response**
     - curl <worker_host>/v1/info/nodestate
-      - Response: ```{"loadMetrics":{"cpu_used_pct":0.76,"memory_used_in_bytes":12222340, "cpu_overload": 1.0, "memory_overload": 0.0},"nodeState":"ACTIVE"}```
+      - Response: ```{"loadMetrics":{"cpuUsedPercent":0.76,"memoryUsedInBytes":12222340, "cpuOverload": true, "memoryOverload": false},"nodeState":"ACTIVE"}```
+
+##### Deprecation Plan
+- The `/v1/info/state` endpoint is currently only used inside DiscoveryManager. Since this will be replaced by the new endpoint `/v1/info/stats`, we will remove `/v1/info/state` from the worker side after this RFC/change is accepted.
 
 ### Coordinator side changes
 #### Collecting worker load data
@@ -99,12 +106,13 @@ For immediate relief, we propose implementing a holistic admission control mecha
 ## Other Approaches Considered
 
 ### Approach 1
-Improve the resource group accounting to include metrics that actually cause overload
+Improve the resource group accounting to include metrics that actually cause overload and improve admission control
 Current limitations
 - CPU is not considered correctly for throttling
 - Memory is not accounted correctly on Velox
 
-We should add the relevant metrics that cause overload in RG configs and improve throttling
+Given the limitations, the work here would be to be report the metrics that actually matter and attribute as accurately as it could be
+For e.g. for cpu, we may need to look for a proxy metrics like `numQueuedDrivers` etc.
 
 - **Pros**
   - RG throttling code could be reused
@@ -113,8 +121,9 @@ We should add the relevant metrics that cause overload in RG configs and improve
 - **Cons**
   - Needs significant work on worker side
   - Also need work on coordinator side
+  - Need more analysis on key metrics
 
-**Based on learnings of key metrics that matter, we would could improve admission control and would be extension of this RFC**
+**Based on learnings of key metrics that matter, we would improve admission control and would be extension of this RFC**
 
 
 
