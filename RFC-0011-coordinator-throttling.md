@@ -52,7 +52,7 @@ Current Limitations
 - Memory Attribution on Velox: Memory usage is not correctly accounted for or attributed. Unaccounted memory arises from libraries with their own allocators, including the HTTP layer (proxygen), warm storage libraries (or other readers), and system libraries that may copy data from the network into buffers that we subsequently read. Attributing this memory usage to specific tasks or queries is challenging.
 - No enforcement: Even if we fix the accounting and improve admission control to run the cluster less loaded, there is no guarantee that RGs won't exceed their limits, potentially causing some workers to become overloaded since Presto lacks preemption support and queries can use more resources once admitted.
 
-Addressing these issues requires non-trivial changes, but this could be a potential improvement to this RFC as documented in Approach-1
+Addressing these issues requires non-trivial changes, but this could be a potential improvement to this RFC on the dimensions of improving Resource Group Admission control.
 
 In this RFC, we propose a comprehensive admission control mechanism that enables reactive throttling of the overall workload by selectively admitting queries without entwining with any RG level changes.
 
@@ -124,10 +124,6 @@ For e.g. for cpu, we may need to look for a proxy metrics like `numQueuedDrivers
   - Also need work on coordinator side
   - Need more analysis on key metrics
   - No enforcement: Even if we fix the accounting and improve admission control to run the cluster less loaded, there is no guarantee that RGs won't exceed their limits, potentially causing some workers to become overloaded since Presto lacks preemption support and queries can use more resources once admitted.
-
-
-**Based on learnings of key metrics that matter, we could improve admission control and would be extension of this RFC**
-
 
 
 ### Approach 2
