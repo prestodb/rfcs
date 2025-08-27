@@ -101,10 +101,11 @@ this.memoizedFunctionsSupplier = Suppliers.memoize(this::bootstrapNamespace);
 
 ## Adoption Plan
 
-In order to control rolling out this feature, add a new configuration file, like "etc/builtin-native-functions.properties". If the file exists, enable the feature. Otherwise, do not attempt to load any native functions as built in functions. Within the file, we can also add config that controls which type of functions use the worker implementation override or not. For example, only use worker implementation when there is a SQL implementation.
+In order to control rolling out this feature, add a new server property to enable this feature or not.
 
 However, if this use case of only overriding specific functions is not needed anymore, the feature can be removed, and we can set native.default to be default namespace to just use the existing native function namespace manager.
 
+More details in this migration plan: https://github.com/prestodb/presto/issues/25905
 
 ## Test Plan
 
