@@ -14,6 +14,19 @@ These metrics can include CPU utilization, memory usage, and task queue lengths.
 The exact criteria used to determine overload are governed by customizable and extensible policies. For example, a policy might specify that a cluster is overloaded if a certain percentage or number of worker nodes reach critical resource thresholds (“run hot”).
 In our case, most of the workers get overloaded within a matter of few minutes.
 
+**Primary mechanism of throttling**
+The primary mechanism of admission control / throttling is via Resource Group
+
+There are certain utilization metrics, such as softMemoryLimit, that exist at the Resource Group (RG) level for admission control. We have conducted a detailed analysis and identified several non-trivial limitations.
+Current Limitations
+- **CPU Throttling**: CPU usage is not accurately considered for throttling. Currently, there is no runtime throttling for CPU; aggregation occurs only after the query completes. Additionally, the existing load balancing logic for CPU does not strictly account for real-time usage.
+- **Memory Attribution on Velox**: Memory usage is not correctly accounted for or attributed. Unaccounted memory arises from libraries with their own allocators, including the HTTP layer (proxygen), warm storage libraries (or other readers), and system libraries that may copy data from the network into buffers that we subsequently read. Attributing this memory usage to specific tasks or queries is challenging.
+  Related issues: [Issue-1](https://github.com/prestodb/presto/issues/25884) and [Issue-2](https://github.com/prestodb/presto/issues/25881)
+
+Addressing these issues requires non-trivial changes, so this current RFC is **complimentary to Resource Group admission control**. This RFC can be considered as secondary line of defense to RG throttling.
+
+In this RFC, we propose a comprehensive admission control mechanism that enables reactive throttling of the overall workload by selectively admitting queries without entwining with any RG level changes.
+
 A sample graph of clusters running hot. All the workers are running hot in this case.
 
 ![Design diagram](RFC-0011/cpuload.png)
@@ -44,17 +57,6 @@ For intermediate task scheduling in Presto, the selection of workers is based on
 This strategy does not consider the current system load when assigning intermediate tasks. 
 
 While we could improve task scheduling (pro-active measure to not let worker overload) through load balancing (more on this in alternative approaches), this alone would be insufficient given the nature of our overload scenario where all workers are saturated in short period of time which is due to admitting lot of heavy queries in short duration of time.
-
-#### Resource Group throttling
-There are certain utilization metrics, such as softMemoryLimit, that exist at the Resource Group (RG) level for admission control. We have conducted a detailed analysis and identified several non-trivial limitations.
-Current Limitations
-- CPU Throttling: CPU usage is not accurately considered for throttling. Currently, there is no runtime throttling for CPU; aggregation occurs only after the query completes. Additionally, the existing load balancing logic for CPU does not strictly account for real-time usage.
-- Memory Attribution on Velox: Memory usage is not correctly accounted for or attributed. Unaccounted memory arises from libraries with their own allocators, including the HTTP layer (proxygen), warm storage libraries (or other readers), and system libraries that may copy data from the network into buffers that we subsequently read. Attributing this memory usage to specific tasks or queries is challenging.
-- No enforcement: Even if we fix the accounting and improve admission control to run the cluster less loaded, there is no guarantee that RGs won't exceed their limits, potentially causing some workers to become overloaded since Presto lacks preemption support and queries can use more resources once admitted.
-
-Addressing these issues requires non-trivial changes, but this could be a potential improvement to this RFC on the dimensions of improving Resource Group Admission control.
-
-In this RFC, we propose a comprehensive admission control mechanism that enables reactive throttling of the overall workload by selectively admitting queries without entwining with any RG level changes.
 
 ### Goals
 - Decrease duration of overload on the cluster
@@ -107,26 +109,6 @@ In this RFC, we propose a comprehensive admission control mechanism that enables
 ## Other Approaches Considered
 
 ### Approach 1
-Improve the resource group accounting to include metrics that actually cause overload and improve admission control
-Current limitations
-- CPU is not considered correctly for throttling
-- Memory is not accounted correctly on Velox
-
-Given the limitations, the work here would be to be report the metrics that actually matter and attribute as accurately as it could be
-For e.g. for cpu, we may need to look for a proxy metrics like `numQueuedDrivers` etc.
-
-- **Pros**
-  - RG throttling code could be reused
-  - More fair to throttle workloads which are actually overloading
-
-- **Cons**
-  - Needs significant work on worker side
-  - Also need work on coordinator side
-  - Need more analysis on key metrics
-  - No enforcement: Even if we fix the accounting and improve admission control to run the cluster less loaded, there is no guarantee that RGs won't exceed their limits, potentially causing some workers to become overloaded since Presto lacks preemption support and queries can use more resources once admitted.
-
-
-### Approach 2
 #### Improve Granular task scheduling
 Not fully baked, but at high-level based on load, the coordinator can assign scores to the workers and selects the top N highest-scoring workers, then randomly chooses from this subset to schedule tasks or splits.
 
@@ -144,7 +126,7 @@ In our cluster most of the workers become overloaded in a fraction of minutes du
 Load balancing may not be immediately helpful in such cases
 This could be a good direction for the future if we see only a select few workers are causing issues.
 
-### Approach 3
+### Approach 2
 Write a separate service which can consume worker load and update global RG (max queries that can run based on the load / policies)
 
 - **Pros**
