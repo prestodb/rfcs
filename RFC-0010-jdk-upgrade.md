@@ -1,4 +1,4 @@
-# **RFC 10 for Presto**
+# **RFC-0010 for Presto**
 
 ## JDK Upgrade for Presto
 
