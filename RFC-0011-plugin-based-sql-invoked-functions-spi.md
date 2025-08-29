@@ -1,4 +1,4 @@
-# **RFC0011 for Presto**
+# **RFC-0011 for Presto**
 
 ## Introduce new SPI for sql invoked functions
 
