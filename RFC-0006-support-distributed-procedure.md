@@ -8,6 +8,7 @@
 ## Related Issues
 
 * https://github.com/prestodb/presto/issues/20425
+* https://github.com/prestodb/presto/pull/22659
 
 ## Summary
 
@@ -100,18 +101,22 @@ The ultimate goal of all of the above is that we can follow the original `CALL` 
 
 ### Overview
 
-1. Distributed procedure is used for processing of actual data besides metadata for a target table, such as data rewriting, merging, sorting or repartitioning. We need to re-factor and expand `Procedure/ProcedureRegistry` architecture, so that we can:
+1. Distributed procedure is a mechanism for the distributed execution of various types of tasks across worker nodes. This is particularly relevant when dealing with the processing of actual data besides metadata for a target table, such as data rewriting, merging, sorting or repartitioning. We need to re-factor and expand `Procedure/ProcedureRegistry` architecture, so that we can:
    * Define a distributed procedure and register it into procedure registry
-   * Acquire and use procedure registry in `presto-analyzer` and `connectors` module
+   * Expose the procedure registry to the `presto-analyzer` and `connectors` module
 
-> Since a distributed procedure is used to handle the data of a target table, it is enforced to contain two required parameters: `schema` and `table_name`.
+> Distributed procedures can be categorized into different subtypes, each with its own unique requirements and use cases. Examples include procedures for physically
+> rewriting table data for optimization, for executing specific actions on cluster worker nodes (such as cache cleanup), and for implementing custom data processing
+> logic (e.g., non-standard operator behaviors). This RFC is dedicated to the design and implementation details of the first subtype—the distributed procedure for
+> table data rewrite and optimization. However, the architecture is designed to allow the future extension of other procedure subtypes.
+
+> Since a table data rewrite distributed procedure is used to handle the data of a target table, it is enforced to contain two required parameters: `schema` and `table_name`.
 > Besides, it can also contain an optional parameter `filter` with the default value of `TRUE`, which indicates the filtering conditions for the data to be processed.
 > A specific procedure implementation can define the parameter list on its own, but it must include the required parameters `schema` and `table_name`, and can optionally use parameter `filter` to narrow down the range of data to be processed.
 
 2. Define a new query type `CALL_DISTRIBUTED_PROCEDURE`, and associate the call distributed procedure statement with this type during preparer phase. So that this kind of statements would fall into the path of `SqlQueryExecutionFactory.createQueryExecution(...)`. The generated `SqlQueryExecution` object can utilize the existing distributed querying, writing, and final committing mechanism to achieve distributed execution for procedures.
 
-
-3. Add a new plan node type: `CallDistributedProcedureNode`. During the analyzing and logical planning phase, construct a logical plan with the following shape for `call distributed procedure` statement:
+3. Add a new plan node type: `CallDistributedProcedureNode`. During the analysis and logical planning phase, a logical plan is constructed based on the specific subtype of the distributed procedure for `call distributed procedure` statement. For a table data rewrite distributed procedure, the resulting logical plan has the following shape :
 
     ```text
     TableScanNode -> FilterNode -> CallDistributedProcedureNode -> TableFinishNode -> OutputNode
@@ -131,13 +136,13 @@ The ultimate goal of all of the above is that we can follow the original `CALL` 
 > Both `beginCallDistributedProcedure` and `finishCallDistributedProcedure` are all invoked in coordinator. More precisely, `finishCallDistributedProcedure` will always be invoked by operator `TableFinishOperator` in the Java worker inside coordinator.
 > That is to say, they will always be called in Java environment.
 
-6. As for a specific connector (such as Iceberg), in the implementation logic of method `beginCallDistributedProcedure` and `finishCallDistributedProcedure` in `ConnectorMetadata`, in addition to accomplish the common logic for this connector (such as starting a transaction, building a transaction context, committing a transaction, etc.), it should also resolve the specified distributed procedure and call its relevant method to execute the procedure-customized logic.
+6. As for a specific connector (such as Iceberg), in the implementation logic of method `beginCallDistributedProcedure` and `finishCallDistributedProcedure` in `ConnectorMetadata`, in addition to accomplish the common logic for this connector (such as starting a transaction, committing a transaction, etc.), it should also construct the procedure context, resolve the specified distributed procedure and call its relevant method to execute the procedure-customized logic.
 
 ### Detailed description
 
 #### 1. Re-factor Procedure/ProcedureRegistry
 
-Add a new type `DistributedProcedure`, which is a subclass of `Procedure`, but with some special requirements: the declared parameters must include `schema` and `table_name`, which are used to specify the target table. There are no strict restrictions on the position and order of these two parameters in the parameter list, but it is recommended to be placed in the first two positions by default.
+Define a new class `DistributedProcedure` that serves as the common parent for all subtypes and is itself a subclass of `Procedure`.
 
 DistributedProcedure does not utilize the property `methodHandle` in parent class, but instead defines two additional method interfaces: `BeginCallDistributedProcedure` and `FinishCallDistributedProcedure`. These two method interfaces would be invoked from related methods in the implementation of `ConnectorMetadata`. And a specific distributed procedure can customize its own actions during the distributed execution by implementing these two method interfaces:
 
@@ -145,17 +150,22 @@ DistributedProcedure does not utilize the property `methodHandle` in parent clas
 @FunctionalInterface
 public interface BeginCallDistributedProcedure
 {
-    ConnectorDistributedProcedureHandle begin(ConnectorSession session, ConnectorTransactionContext transactionContext, ConnectorTableLayoutHandle tableLayoutHandle, Object[] arguments);
+    ConnectorDistributedProcedureHandle begin(ConnectorSession session, ConnectorProcedureContext procedureContext, ConnectorTableLayoutHandle tableLayoutHandle, Object[] arguments);
 }
 
 @FunctionalInterface
 public interface FinishCallDistributedProcedure
 {
-    void finish(ConnectorTransactionContext transactionContext, ConnectorDistributedProcedureHandle procedureHandle, Collection<Slice> fragments);
+    void finish(ConnectorProcedureContext procedureContext, ConnectorDistributedProcedureHandle procedureHandle, Collection<Slice> fragments);
 }
 ```
 
-Due to the fact that `DistributedProcedure` is a subclass of `Procedure`, the current implementation of `ProcedureRegistry` directly supports registration, deletion, and maintenance of `DistributedProcedure`. Besides, two additional methods were added to `ProcedureRegistry` to support the related judgment and resolution functions for `DistributedProcedure`:
+Additionally, define a `TableDataRewriteDistributedProcedure` class that extends `DistributedProcedure`. This class represents the distributed procedure for the table data rewrite type.
+This subtype of distributed procedures have some special requirements: the declared parameters must include `schema` and `table_name`, which are used to specify the target table.
+There are no strict restrictions on the position and order of these two parameters in the parameter list, but it is recommended to be placed in the first two positions by default.
+
+Due to the fact that `DistributedProcedure` is a subclass of `Procedure`, the current implementation of `ProcedureRegistry` directly supports registration, deletion, and maintenance of `DistributedProcedure`.
+Besides, two additional methods were added to `ProcedureRegistry` to support the related judgment and resolution functions for `DistributedProcedure`:
 
 ```java
 public DistributedProcedure resolveDistributed(ConnectorId connectorId, SchemaTableName name);
@@ -187,9 +197,9 @@ In the preparer phase, when encountering a call statement, utilize the injected 
 
 In this way, in `LocalDispatchQueryFactory` we can choose `SqlQueryExecutionFactory` to generate the query execution for `call distributed procedure` statement. This allows for the utilization of distributed data scanning, writing, and unified committing mechanism during actual execution.
 
-#### 3. Processing logic during analyzing and logical planning phase
+#### 3. Processing logic during analysis and logical planning phase
 
-Add a new plan node type `CallDistributedProcedureNode` for `call distributed procedure` statement, which is defined as follows:
+Add a new plan node type `CallDistributedProcedureNode` for `call distributed procedure` statement (with table-data-rewrite type), which is defined as follows:
 
 ```java
 public class CallDistributedProcedureNode
@@ -225,7 +235,8 @@ public static class CallDistributedProcedureTarget
 }
 ```
 
-During the analyzing and logical planning phase, the `call distributed procedure` statement will be planned into a logical plan with the following shape:
+During the analysis and logical planning phase, a logical plan is constructed based on the specific subtype of the distributed procedure for `call distributed procedure` statement.
+For a table-data-rewrite distributed procedure, the resulting logical plan has the following shape :
 
 ```text
 TableScanNode -> FilterNode -> CallDistributedProcedureNode -> TableFinishNode -> OutputNode
@@ -235,7 +246,8 @@ Among them, `TableScanNode -> FilterNode` defines the data to be processed. It's
 
 The `CallDistributedProcedureNode -> TableFinishNode` structure is similar to the `TableWriterNode -> TableFinishNode` structure, used to perform distributed data manipulation and final unified submission behavior.
 
-As will describe later, `CallDistributedProcedureNode` and `TableFinishNode` will be local planned to `TableWriterOperator` and `TableFinishOperator` in the worker end. So we can reuse the existing protocol message between `TableWriterNode` and `TableFinishNode`. Furthermore, we currently do not support collecting statistics during a data write in distributed procedure,
+As will describe later, `CallDistributedProcedureNode` and `TableFinishNode` will be local planned to `TableWriterOperator` and `TableFinishOperator` in the worker end.
+So we can reuse the existing protocol message between `TableWriterNode` and `TableFinishNode`. Furthermore, we currently do not support collecting statistics during a data write in distributed procedure,
 whether to collect statistics depends on the specific connectors and specific distributed procedures we need to support. So for now, we only need a subset of the current existing protocol, and can extend it when needed.
 
 In details, `TableWriterOperator(CallDistributedProcedureNode)` will send output pages to `TableFinishOperator(TableFinishNode)` with the following format:
@@ -254,13 +266,16 @@ null        frag_slice2         ctx_slice
   This commit context corresponds to a `TableCommitContext` instance, and has the same value on all rows, so it uses a run length encoding.
   In `TableFinishOperator`, this commit context would be deserialized and used to track and maintain the partial commit messages in `lifespan+stage` dimensions from previous stage, and finally be submitted uniformly.
 
-Note: when supporting `call distributed procedure` statement, using a new plan node `CallDistributedProcedureNode` instead of directly reusing `TableWriterNode`, mainly considering that although they are very similar in the entire process, they may have many differences in the future, for example:
+Note: when supporting `call distributed procedure` statement (with table-data-rewrite type), using a new plan node `CallDistributedProcedureNode` instead of directly reusing `TableWriterNode`, mainly considering that although they are very similar in the entire process, they may have many differences in the future, for example:
 * The `call distributed procedure` statement may not only return the updated rows number, but also a lot of content (such as the number of affected files, etc., referring to Spark's procedure for iceberg `rewrite_data_files`)
 * We may allow each specific distributed procedure to define its own return result columns in the future
 
 #### 4. Processing logic during optimizing, segmenting, and local planning phase
 
-The optimizing, segmenting, group execution tagging, and local planning of `CallDistributedProcedureNode` are similar to `TableWriterNode`. Due to the current definition of `CallDistributedProcedureNode` skipping some fields in `TableWriterNode` that are currently considered not so necessary for distributed procedure, the current handling logic of `CallDistributedProcedureNode` in various visitors and rewriters can be considered as a simplified version of `TableWriterNode`. It was ultimately planned to a `TableWriterOperator`, which holds a `ExecuteProcedureHandle` used to maintain informations of the called procedure and the target table:
+The optimizing, segmenting, group execution tagging, and local planning of `CallDistributedProcedureNode` are similar to `TableWriterNode`.
+Due to the current definition of `CallDistributedProcedureNode` skipping some fields in `TableWriterNode` that are currently considered not so necessary for distributed procedure,
+the current handling logic of `CallDistributedProcedureNode` in various visitors and rewriters can be considered as a simplified version of `TableWriterNode`.
+It was ultimately planned to a `TableWriterOperator`, which holds a `ExecuteProcedureHandle` used to maintain informations of the called procedure and the target table:
 
 ```java
 public static class ExecuteProcedureHandle
@@ -283,9 +298,12 @@ public final class DistributedProcedureHandle
 }
 ```
 
-Wherein, `ConnectorDistributedProcedureHandle` is an empty interface that needs to be implemented by connectors. It represents a handle related to the execution of distributed procedures that Presto engine itself does not interpret and utilize, but is passed to the specific connector through connector metadata interfaces for interpretation and utilization.
+Wherein, `ConnectorDistributedProcedureHandle` is an empty interface that needs to be implemented by connectors. It represents a handle related to the execution of distributed procedures that Presto engine itself does not interpret and utilize,
+but is passed to the specific connector through connector metadata interfaces for interpretation and utilization.
 
-Finally, a new optimizer `RewriteWriterTarget` is added specifically, which is placed after all optimization rules. The reason is that after optimizing the entire plan, some filter conditions may be pushed down to `TableScanNode`, and at this time, the information in `TableHandle` of the target table held in `CallDistributedProcedureTarget` built during the logical planning phase may become inaccurate (without including the pushed down filter conditions). Therefore, it is necessary to update the `CallDistributedProcedureTarget` held in `TableFinishNode` and `CallDistributedProcedureNode` based on the `TableHandle` held in the underlying `TableScanNode` after the entire optimization is completed.
+Finally, a new optimizer `RewriteWriterTarget` is added specifically, which is placed after all optimization rules. The reason is that after optimizing the entire plan, some filter conditions may be pushed down to `TableScanNode`,
+and at this time, the information in `TableHandle` of the target table held in `CallDistributedProcedureTarget` built during the logical planning phase may become inaccurate (without including the pushed down filter conditions).
+Therefore, it is necessary to update the `CallDistributedProcedureTarget` held in `TableFinishNode` and `CallDistributedProcedureNode` based on the `TableHandle` held in the underlying `TableScanNode` after the entire optimization is completed.
 
 #### 5. Definition of metadata interface
 
@@ -339,33 +357,44 @@ public interface ConnectorMetadata
 }
 ```
 
-Wherein, `beginCallDistributedProcedure` is used for preparation work before the start of distributed scheduling and generate the execution information that needs to be passed to worker nodes. And `finishCallDistributedProcedure` is used for the whole transaction submission after the completion of distributed writing.
+Wherein, `beginCallDistributedProcedure` is used for preparation work before the start of distributed scheduling and generate the execution information that needs to be passed to worker nodes.
+And `finishCallDistributedProcedure` is used for the whole transaction submission after the completion of distributed writing.
 
-As for a specific connector (such as Iceberg), in the implementation logic of method `beginCallDistributedProcedure` and `finishCallDistributedProcedure` in `ConnectorMetadata`, in addition to accomplish the common logic for this connector (such as starting a transaction, building a transaction context, committing a transaction, etc.), it should also resolve the specified distributed procedure and call its relevant method to execute the procedure-customized logic.
+As for a specific connector (such as Iceberg), in the implementation logic of method `beginCallDistributedProcedure` and `finishCallDistributedProcedure` in `ConnectorMetadata`,
+in addition to accomplish the common logic for this connector (such as starting a transaction, committing a transaction, etc.), it should also build a procedure context,
+resolve the specified distributed procedure and call its relevant method to execute the procedure-customized logic.
 
 #### 6. Iceberg connector's support for distributed procedure
 
-In Iceberg, we often need to record the original data files that have been scanned and rewritten during the execution of table data operations (including deleted files that have been fully applied), and in the final submission, combine the newly generated data files due to rewriting to make some changes and transaction submissions at the metadata level.
+In Iceberg, we often need to record the original data files that have been scanned and rewritten during the execution of table data operations (including deleted files that have been fully applied),
+and in the final submission, combine the newly generated data files due to rewriting to make some changes and transaction submissions at the metadata level.
 
-Therefore, we extended the concept of transaction context, and maintain the connector split source planned by the execution of `BeginCallDistributedProcedure` into current transaction context. Besides, we also maintain the actual scanned and processed data files and delete files during data file planning into current transaction context. The definition of the extended Iceberg transaction context is as follows:
+Therefore, we introduce the concept of procedure context, and maintain the connector split source planned by the execution of `BeginCallDistributedProcedure` into the current procedure context.
+Besides, we also maintain the actual scanned and processed data files and delete files during data file planning into current procedure context. The definition of the Iceberg procedure context is as follows:
 
 ```java
 public class IcebergTransactionContext
             implements ConnectorTransactionContext
 {
-    final Optional<Table> table;
-    final Transaction transaction;
     final Set<DataFile> scannedDataFiles = new HashSet<>();
     final Set<DeleteFile> fullyAppliedDeleteFiles = new HashSet<>();
+    final Map<String, Object> relevantData = new HashMap<>();
+
+    Optional<Table> table = Optional.empty();
+    Transaction transaction;
     Optional<ConnectorSplitSource> connectorSplitSource = Optional.empty();
 
     ......
 }
 ```
 
-We also extended `IcebergSplitManager`, so that it will check firstly whether there is a planned `ConnectorSplitSource` set in current transaction context. If so, it will directly use and return the existing split source. This allows us to customize our own connector split source, and implement some additional logic within it, such as recording the actual scanned data files and delete files as we batch by batch obtain splits information during scheduling. The scanned data files and delete files are also maintained in current transaction context for future usage in final submission.
+We also extended `IcebergSplitManager`, so that it will check firstly whether there is a planned `ConnectorSplitSource` set in current procedure context.
+If so, it will directly use and return the existing split source. This allows us to customize our own connector split source, and implement some additional logic within it,
+such as recording the actual scanned data files and delete files as we batch by batch obtain splits information during scheduling.
+The scanned data files and delete files are also maintained in current procedure context for future usage in final submission.
 
-Define the `IcebergDistributedProcedureHandle` class, which is an implementation of the `ConnectorDistributedProcedureHandle` interface described above. It represents the information related to the actual data writing for specific target table:
+Define the `IcebergDistributedProcedureHandle` class, which is an implementation of the `ConnectorDistributedProcedureHandle` interface described above.
+It represents the information related to the actual data writing for specific target table:
 
 ```java
 public class IcebergDistributedProcedureHandle
@@ -386,39 +415,68 @@ public class IcebergDistributedProcedureHandle
 
 The implementation logic of Iceberg for `ConnectorMetadata.beginCallDistributedProcedure(...)` is as follows:
 1. Firstly, get a reference to the target iceberg table based on the parameters 
-2. Next, open a new Iceberg transaction through the reference of the table, and encapsulate it into a transaction context `IcebergTransactionContext`
+2. Next, open a new Iceberg transaction through the reference of the table, and encapsulate it into a procedure context `IcebergProcedureContext`
 3. Resolve the procedure specified in the parameters through the injected procedure registry, and verify that it is of type `DistributedProcedure`
-4. Finally, call `begin(...)` of the method handle `beginCallDistributedProcedure` held by the procedure, pass in the transaction context plus with other relevant parameters, and return the result of type `ConnectorDistributedProcedureHandle`.
+4. Finally, call `begin(...)` of the method handle `beginCallDistributedProcedure` held by the procedure, pass in the procedure context plus with other relevant parameters, and return the result of type `ConnectorDistributedProcedureHandle`.
 
 The implementation logic of Iceberg for `ConnectorMetadata.finishCallDistributedProcedure(...)` is as follows:
 1. Firstly, resolve the procedure specified in the parameters through the injected procedure registry, and verify that it is of type `DistributedProcedure`
-2. Then, call `finish(...)` of the method handle `finishCallDistributedProcedure` held by the procedure, pass in the transaction context plus with other relevant parameters
-3. Finally, commit the Iceberg transaction held in current transaction context and then destroy the transaction context
+2. Then, call `finish(...)` of the method handle `finishCallDistributedProcedure` held by the procedure, pass in the procedure context plus with other relevant parameters
+3. Finally, commit the current Iceberg transaction and then destroy the procedure context
 
 #### 7. Iceberg connector's implementation for `rewrite_data_files`
 
-Firstly, a dedicated `CallDistributedProcedureSplitSource` was defined to support generating a split source with additional custom logic. It receives a consumer for `FileScanTask`, and would be used in the implementation logic of the interface method `BeginCallDistributedProcedure` by `rewrite_data_files`. As the splits information is obtained batch by batch during actual scheduling, the consumer logic passed in by `rewrite_data_files` will be executed, which record the actual scanned data files and delete files information into the current transaction context for later use in submission.
+Firstly, a dedicated `CallDistributedProcedureSplitSource` was defined to support generating a split source with additional custom logic.
+It receives a consumer for `FileScanTask`, and would be used in the implementation logic of the interface method `BeginCallDistributedProcedure` by `rewrite_data_files`.
+As the splits information is obtained batch by batch during actual scheduling, the consumer logic passed in by `rewrite_data_files` will be executed,
+which record the actual scanned data files and delete files information into the current procedure context for later use in submission.
 
-Then build a `DistributedProcedure` instance with parameters description as follows and a namespace of `system.rewrite_data_files`. And follow the normal procedures to register it into the `ProcedureRegistry`.
+Then build a `TableDataRewriteDistributedProcedure` instance with parameters description as follows and a namespace of `system.rewrite_data_files`. And follow the normal procedures to register it into the `ProcedureRegistry`.
 
 ```text
 (schema: varchar required, table_name: varchar required, filter: varchar, options: map (varchar, varchar))
 ```
 
 The implementation logic for `BeginCallDistributedProcedure` in `rewrite_data_files` is:
-1. Obtain `Table icebergTable` and `IcebergTableHandle tableHandle` from current transaction context
+1. Obtain `Table icebergTable` and `IcebergTableHandle tableHandle` from current procedure context
 2. Build Iceberg's table scan object based on `snapshotId` and the valid filter condition `validPredicate` recorded in parameter `icebergTableLayoutHandle` (default `TRUE` if not set)
-3. Build a consumer for `FileScanTask`, where the data files and delete files from scan tasks will be recorded into the corresponding properties of current transaction context
-4. Build a `CallDistributedProcedureSplitSource` object based on the table scan and consumer obtained above, and set it into the current transaction context 
+3. Build a consumer for `FileScanTask`, where the data files and delete files from scan tasks will be recorded into the corresponding properties of current procedure context
+4. Build a `CallDistributedProcedureSplitSource` object based on the table scan and consumer obtained above, and set it into the current procedure context 
 5. Finally, based on the relevant information of `icebergTable` and `tableHandle`, construct and return an `IcebergDistributedProcedureHandle` object
 
 The implementation logic for `FinishCallDistributedProcedure` in `rewrite_data_files` is:
-1. Obtain `Table icebergTable` from current transaction context 
+1. Obtain `Table icebergTable` from current procedure context 
 2. Deserialize the parameter `fragments` to obtain the submission information of all distributed tasks `List<CommitTaskData> commitTasks` passed from the previous stage. A `CommitTaskData` instance here corresponds to a value in Column `fragments` described in the protocol message format between `CallDistributedProcedureNode` and `TableFinishNode` above
 3. Obtain the set of new data files `Set<DataFile> newFiles` generated due to the actual distributed writing through `commitTasks`
-4. Retrieve the set of scanned original data files `Set<DataFile> scannedDataFiles` as well as the set of fully applied deleted files `Set<DeleteFile> fullyAppliedDeleteFiles` from current transaction context 
-5. Leverage `RewriteFiles` API from current Iceberg transaction to replace the scanned data files and fully applied delete files with the newly generated data files at metadata level 
-6. Commit the single action, not the whole transaction. (The whole transaction would be unified committed in iceberg metadata)
+4. Retrieve the set of scanned original data files `Set<DataFile> scannedDataFiles` as well as the set of fully applied deleted files `Set<DeleteFile> fullyAppliedDeleteFiles` from current procedure context 
+5. Leverage `RewriteFiles` API from current Iceberg transaction to replace the scanned data files and fully applied delete-files with the newly generated data files at metadata level 
+6. Commit the single `RewriteFiles` action, not the whole transaction. (The whole transaction would be unified committed in iceberg metadata)
+
+#### 8. Work required to support distributed procedure in presto c++
+
+The following work is required to support the above design on a Presto C++ worker cluster (please refer to https://github.com/prestodb/presto/pull/22659):
+
+ - Add `CallDistributedProcedureNode` and its related types (`ExecuteProcedureHandle`, `DistributedProcedureHandle`, `ConnectorDistributedProcedureHandle`) to the `presto_protocol_core` protocol.
+
+ - Add `IcebergDistributedProcedureHandle` to the `presto_protocol_iceberg` protocol.
+
+ - Execute Presto native worker protocol code generation.
+
+ - Extend `ConnectorProtocolTemplate` with a new type parameter for `ConnectorDistributedProcedureHandle` and update the template specialization declarations for the Hive, Iceberg, TPC-H, and System connectors accordingly.
+
+ - Add the following method definition to `PrestoToVeloxConnector` to convert an `ExecuteProcedureHandle` into a Velox `ConnectorInsertTableHandle`, and then implement this method in `IcebergPrestoToVeloxConnector` (blocked by: Iceberg table insertion feature implementation):
+
+```
+  [[nodiscard]] virtual std::unique_ptr<
+      velox::connector::ConnectorInsertTableHandle>
+  toVeloxInsertTableHandle(
+      const protocol::ExecuteProcedureHandle* executeProcedureHandle,
+      const TypeParser& typeParser) const {
+    return {};
+  }
+```
+
+ - Finally, in `PrestoToVeloxQueryPlan`, add support for `CallDistributedProcedureNode` by converting it into a Velox `TableWriteNode`. The `ConnectorInsertTableHandle` for this node should be generated by invoking the aforementioned `toVeloxInsertTableHandle` method with the `executeProcedureHandle`.
 
 ## Adoption Plan
 
