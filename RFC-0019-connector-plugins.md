@@ -180,20 +180,18 @@ plugin.dir=/opt/presto/plugin  # Optional, defaults to ./plugin
 Example plugin:
 ```cpp
 // Step 1: Protocol deserialization - handles binary to protocol type
-class ArrowFlightProtocol : public ConnectorProtocol {
-  void deserialize(const std::string& binary,
-                   std::shared_ptr<ConnectorSplit>& split) const override {
-    // Deserialize binary into protocol-specific type
-    ArrowFlightSplit protocolSplit;
-    // ... deserialize binary data into protocolSplit ...
-    split = std::make_shared<ArrowFlightSplit>(std::move(protocolSplit));
+class TpchConnectorProtocol final : public ConnectorProtocol {
+ public:
+  void deserialize(
+      const std::string& binaryData,
+      std::shared_ptr<ConnectorTableHandle>& proto) const override;
+
+  void to_json(json& j, const std::shared_ptr<ConnectorTableHandle>& p)
+      const override {
+    VELOX_NYI("JSON not supported with binary serialization");
   }
 
-  void serialize(const std::shared_ptr<ConnectorSplit>& split,
-                 std::string& binary) const override {
-    auto arrowSplit = std::dynamic_pointer_cast<ArrowFlightSplit>(split);
-    // ... serialize arrowSplit to binary ...
-  }
+  /* ... Other deserialization methods, serialization methods throw NYI errors ... */
 };
 
 // Step 2: PrestoToVeloxConnector - creates protocol and converts types
