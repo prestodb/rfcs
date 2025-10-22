@@ -1,4 +1,4 @@
-# **RFC-0016 for Java Connector Federation in C++ Workers**
+# **RFC-0018 for Java Connector Federation in C++ Workers**
 
 ## Java Connector Federation via Arrow Flight
 
