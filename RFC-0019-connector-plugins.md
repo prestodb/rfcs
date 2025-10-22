@@ -1,4 +1,4 @@
-# RFC-0016 for Presto
+# RFC-0019 for Presto
 
 ## Connector Plugin Support for Presto C++ Workers
 
@@ -77,7 +77,7 @@ This RFC leverages existing infrastructure:
 
 ### Architecture Diagram
 
-![Architecture Diagram](RFC-0016/architecture-diagram.png)
+![Architecture Diagram](RFC-0019/architecture-diagram.png)
 
 ### Interface Contracts
 
