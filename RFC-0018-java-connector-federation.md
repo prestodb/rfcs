@@ -338,7 +338,7 @@ The Flight server deserializes this request and executes the split using the app
   - Set `arrow-flight.server` and `arrow-flight.server.port` to point to Flight server
 
 * Flight server deployment:
-  - Deploy `presto-flight-server` as a separate service
+  - Deploy `presto-flight-server` as a separate service (using the Presto launcher, same as other services such as the resource mananger and function server)
   - Configure with standard Presto server configuration structure
   - Can be colocated with C++ workers or deployed separately
 
