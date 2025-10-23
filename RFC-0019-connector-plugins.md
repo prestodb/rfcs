@@ -180,7 +180,7 @@ plugin.dir=/opt/presto/plugin  # Optional, defaults to ./plugin
 Example plugin:
 ```cpp
 // Step 1: Protocol deserialization - handles binary to protocol type
-class TpchConnectorProtocol final : public ConnectorProtocol {
+class ArrowConnectorProtocol final : public ConnectorProtocol {
  public:
   void deserialize(
       const std::string& binaryData,
