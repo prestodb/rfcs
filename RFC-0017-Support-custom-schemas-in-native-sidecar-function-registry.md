@@ -1,4 +1,4 @@
-# **RFC-0021 for Presto**
+# **RFC-0017 for Presto**
 
 ## [Title] Support custom schemas in native sidecar function registry
 
