@@ -1,5 +1,6 @@
+# RFC-0021 for Presto
 
-## **Expand Procedure Architecture to Support Distributed Execution**
+## Expand Procedure Architecture to Support Distributed Execution
 
 ## Proposers
 
@@ -125,7 +126,7 @@ The ultimate goal of all of the above is that we can follow the original `CALL` 
     Wherein, `CallDistributedProcedureNode` holds `CallDistributedProcedureTarget`, which is a subclass of `WriterTarget`, used to maintain the procedure information and related call parameters information.
 
 
-![Distributed_procedure_architecture](RFC-0006/distributed_procedure.png)
+![Distributed_procedure_architecture](RFC-0021/distributed_procedure.png)
 
 
 4. The optimizing, segmenting, group execution tagging, and local planning of `CallDistributedProcedureNode` are similar to `TableWriterNode`. And it would be ultimately local planned to a `TableWriterOperator` (which holds a specific type of `ExecutionWriterTarget` subclass related to `call distributed procedure` statement). When creating a `PageSink` to execute data writing, a corresponding `ConnectorPageSink` will be generated based on the specific subclass and property values of `ExecutionWriterTarget` that are actually held by `TableWriterOperator`.
