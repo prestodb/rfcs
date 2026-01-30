@@ -51,9 +51,9 @@ The implementation follows six steps: planning, filter construction, collection,
 
 During **query planning**, `AddDynamicFilterRule` (a new optimizer in presto-main-base) identifies hash joins where the build side is selective. It populates the `dynamicFilters` field on the `JoinNode` (a map from filter ID to join column) and marks the probe-side `TableScanNode` with the corresponding filter ID. The optimizer does not need to know whether the column is a partition column or has file-level statistics—that decision is deferred to the connector.
 
-During **build-side execution**, the `HashBuild` operator collects distinct join key values while constructing the hash table. If cardinality stays below a configurable limit (default 10K), it creates a `TupleDomain` with discrete values for perfect filtering. Otherwise, it falls back to a range (min/max only). Upon completion, the filter is stored in the task's outputs collection and `outputsVersion` in `TaskStatus` is incremented.
+During **build-side execution**, the `HashBuild` operator collects distinct join key values while constructing the hash table. If cardinality stays below a configurable limit (default 10K), it creates a `TupleDomain` with discrete values for perfect filtering. Otherwise, it falls back to a range (min/max only). Upon completion, the filter is stored in the task's dynamic filter collection.
 
-The **coordinator collects filters** via `DynamicFiltersFetcher`, a new component that detects version changes in `TaskStatus` during the existing polling cycle. It then long-polls the worker's `/v1/task/{taskId}/outputs/filter/{version}` endpoint to fetch new filters incrementally. The version-based protocol handles multiple `HashBuild` operators in the same task completing at different times.
+The **coordinator collects filters** via `DynamicFilterFetcher`, a new component that long-polls each build-side worker's `GET /v1/task/{taskId}/dynamicFilters` endpoint. The endpoint is modeled as a RESTful resource: each GET returns the full collection of filters produced by the task so far, and the coordinator deduplicates on its side by tracking which `(taskId, filterId)` pairs it has already processed. A version header (`X-Presto-Dynamic-Filters-Version`) enables efficient long-polling—the server blocks until new filters are available beyond what the client has already seen.
 
 For **filter merging**, the coordinator uses the existing `LocalDynamicFilter` to accumulate partial filters from multiple build-side workers (for partitioned joins). It merges using `TupleDomain.columnWiseUnion()` with UNION semantics: since each worker sees a disjoint subset of build data (hash-partitioned), valid join keys are those seen by ANY worker, so discrete values become set unions and ranges expand to cover all workers' min/max bounds. For broadcast joins with a single build worker, the filter is immediately complete.
 
@@ -113,13 +113,11 @@ This ensures only joins explicitly marked by the optimizer produce filters for c
 
 1. **Filter extraction** (C++): `HashBuild` completes the hash table and calls `joinBridge_->setHashTable()` to hand it to `HashProbe`. If the join has registered dynamic filter IDs, we call `table_->hashers()` to get the `VectorHasher` objects for join key columns. For low-cardinality keys, `VectorHasher::getFilter()` returns a `BigintValues` filter with discrete values. For high-cardinality keys (where VectorHasher overflows), we build a range filter from the tracked min/max. These are converted to a `TupleDomain` JSON representation.
 
-2. **Storage in PrestoTask** (C++): The filter is stored in a new `outputs_` map in `PrestoTask`, keyed by filter ID. We atomically increment `outputsVersion` in the task's status. This requires adding a callback from Velox's `Task` to Presto's `PrestoTask` when filters are ready.
+2. **Storage in PrestoTask** (C++): The filter is stored in a new `dynamicFilters_` map in `PrestoTask`, keyed by filter ID. This requires adding a callback from Velox's `Task` to Presto's `PrestoTask` when filters are ready.
 
-3. **Version detection** (Java): The coordinator's `TaskInfoFetcher` already polls `TaskStatus` periodically. We add an `outputsVersion` field to `TaskStatus`. When the coordinator detects a version change, it knows new outputs (filters) are available.
+3. **Filter fetch** (Java → C++): The coordinator long-polls `GET /v1/task/{taskId}/dynamicFilters`, a RESTful resource endpoint registered in `TaskResource.cpp`. The response always contains the full collection of filters produced by the task so far. The coordinator uses the `X-Presto-Dynamic-Filters-Version` request header to signal what it has already seen, enabling the server to block until new filters are available rather than returning the same state. The coordinator deduplicates responses by tracking processed `(taskId, filterId)` pairs.
 
-4. **Filter fetch** (Java → C++): The coordinator calls a new HTTP endpoint `GET /v1/task/{taskId}/outputs/filter/{version}`. This endpoint is registered in `TaskResource.cpp` and returns all filters created since the specified version as JSON.
-
-5. **Long-polling**: The endpoint supports `X-Presto-Max-Wait` header (like existing endpoints) so the coordinator can wait up to N seconds for filters to become available, reducing polling overhead.
+4. **Long-polling**: The endpoint supports `X-Presto-Max-Wait` header (like existing endpoints) so the coordinator can wait up to N seconds for filters to become available, reducing polling overhead.
 
 The coordinator then merges filters from all build partitions using `LocalDynamicFilter` and distributes the merged result.
 
@@ -143,9 +141,9 @@ ALGORITHM BuildFilter(values):
 
 #### 2.4 Filter Collection
 
-The coordinator collects filters through an extension to `HttpRemoteTask`. The existing `ContinuousTaskStatusFetcher` polls `TaskStatus` from workers. When it detects an `outputsVersion` change, `HttpRemoteTask` fetches the new filters via the `/v1/task/{taskId}/outputs/filter/{version}` endpoint and passes them to the coordinator's `LocalDynamicFilter` (created by `SqlQueryScheduler` for each distributed dynamic filter in the query).
+The coordinator collects filters through `DynamicFilterFetcher`, a component of `HttpRemoteTask` that long-polls the worker's `GET /v1/task/{taskId}/dynamicFilters` endpoint. The endpoint is a RESTful resource: each response contains the full collection of filters produced by the task, and the coordinator deduplicates by tracking which `(taskId, filterId)` pairs it has already processed. The `X-Presto-Dynamic-Filters-Version` request header enables efficient long-polling—the server blocks until new filters are available beyond what the client reports having seen, avoiding busy-loop polling when no new filters have been produced.
 
-The version-based protocol handles multiple `HashBuild` operators in the same task completing at different times, allowing incremental filter collection without re-fetching.
+Fetched filters are passed to the coordinator's `LocalDynamicFilter` (created by `SqlQueryScheduler` for each distributed dynamic filter in the query). When a task has multiple `HashBuild` operators completing at different times, the endpoint returns all completed filters in each response and the coordinator processes only the new ones.
 
 #### 2.5 Filter Merging
 
@@ -282,15 +280,17 @@ The composite future resolves progressively as individual filters complete, retu
 
 **Protocol extensions:**
 
-- Add `outputsVersion` field to `TaskStatus` (incremented when any collected output is ready)
-- Add HTTP endpoint `GET /v1/task/{taskId}/outputs/filter/{version}` in C++ workers
+- Add HTTP endpoint `GET /v1/task/{taskId}/dynamicFilters` in C++ workers
 
 **HTTP Endpoint Specification:**
 
+The dynamic filters endpoint is an endpoint that returns the full collection of filters produced by the task.
+
 ```
-GET /v1/task/{taskId}/outputs/filter/{version}
+GET /v1/task/{taskId}/dynamicFilters
 
 Headers:
+  X-Presto-Dynamic-Filters-Version: <n>  (optional, client's last-seen version)
   X-Presto-Max-Wait: <duration>  (optional, e.g., "1s")
 
 Response 200 OK:
@@ -305,13 +305,13 @@ Response 200 OK:
 }
 
 Response 204 No Content:
-  (returned if no new filters since version {n} and max-wait expires)
+  (returned if no new filters beyond version {n} and max-wait expires)
 
 Response 404 Not Found:
   (task does not exist)
 ```
 
-The endpoint returns all filters with version > `n`. The coordinator tracks the last fetched version per task and requests incrementally.
+The response always contains all filters produced by the task, not a diff. The `X-Presto-Dynamic-Filters-Version` header is analogous to `X-Presto-Current-State` on the TaskStatus endpoint: it tells the server what the client already knows so the server can block until there is something new, rather than returning immediately with the same state. The coordinator deduplicates on its side by tracking which `(taskId, filterId)` pairs have already been processed.
 
 **No breaking changes**: The new SPI method has a default implementation.
 
