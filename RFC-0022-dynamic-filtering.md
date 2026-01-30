@@ -73,6 +73,19 @@ A filter is generated when the join column is a partition column on the probe si
 
 When a beneficial join is identified, the rule populates the `dynamicFilters` field on the `JoinNode` and marks the probe-side `TableScanNode` with the filter ID.
 
+**Transitive filter propagation:**
+
+When joins are chained, the optimizer propagates dynamic filters transitively through equality relationships to reach table scans deeper in the plan tree. Consider `HashJoin(HashJoin(A, B), C)` with conditions `A.x = B.x` and `B.x = C.x`:
+
+- C is the build side of the outer join, producing a filter on column `x`.
+- The probe side is `HashJoin(A, B)`, where `A.x = B.x` establishes an equivalence.
+- The optimizer follows this equivalence chain: C's filter on `x` applies to B's column `x`, and since `B.x = A.x`, it also applies to A's table scan on column `x`.
+- Result: A's `TableScanNode` is marked with a dynamic filter from the C join, even though they are not directly joined.
+
+The rule maintains equivalence sets of columns across joins as it traverses the plan tree. For each hash join with a dynamic filter, it walks the probe subtree to find all table scans reachable through equality chains. This means a single build-side filter can be applied to multiple table scans simultaneously.
+
+Note that for some join orderings, transitivity is implicit. With `HashJoin(A, HashJoin(B, C))`, B is filtered by C before joining with A, so the filter from B to A already reflects C's filtering without explicit transitive propagation. Explicit transitivity is needed when the intermediate table (B) is on the build side rather than the probe side.
+
 #### 2.2 Runtime Filter Structure
 
 The filter uses Presto's existing `TupleDomain<ColumnHandle>`, which supports both discrete values and ranges. For cardinality ≤10K, the filter contains all distinct values (8N bytes, 0% false positives). For cardinality >10K, it falls back to a range containing only min/max (16 bytes). Memory usage is bounded by a configurable limit on discrete values.
@@ -190,14 +203,16 @@ The `complete` field indicates this is a fully merged filter safe for pruning. W
 1. `PrestoTask` receives filter, verifies `complete: true`, stores in task-level map
 2. Calls `veloxTask->addDynamicFilter(filterId, filter)` to inject into Velox
 3. Velox's `TableScan` (which registered interest in this filter ID during plan conversion) applies filter at two levels:
-    - **Row-group pruning**: `ParquetReader` tests row group statistics against the filter's range
-    - **Row-level filtering**: Values tested against type-specific Velox filters (hash lookup for discrete values, range comparison for min/max)
+   - **Row-group pruning**: `ParquetReader` tests row group statistics against the filter's range
+   - **Row-level filtering**: Values tested against type-specific Velox filters (hash lookup for discrete values, range comparison for min/max)
 
 **Timing**: Probe execution may start before the filter arrives. Early splits proceed without row-level filtering but still benefit from Phase 1 partition/file pruning. When the filter arrives mid-execution, Velox applies it to subsequent row groups and rows.
 
 #### 2.8 Filter Application
 
-Filters apply at four cascading levels. At partition and file levels, the connector's split source (e.g., `HiveSplitSource`, `IcebergSplitSource`) tests partition/file statistics against the filter when generating splits. It builds a `TupleDomain` from the partition's min/max and intersects with the filter; if the result is NONE, the partition is skipped. At row group level, Velox's `ParquetReader` applies the same logic to row group statistics. At row level, Velox converts the `TupleDomain` to type-specific filters (hash table lookup for discrete values, range comparison for min/max).
+The complete filter—containing domains on all columns from all contributing joins—is passed unchanged to every pruning level. Each level evaluates the columns it has information for; domains on columns without available statistics pass through unchecked. Deeper levels have more information available, so more of the filter is exercised as pruning cascades.
+
+At the partition level, the connector's split source (e.g., `HiveSplitSource`, `IcebergSplitSource`) tests partition values against the filter. Only columns that are partition columns can be evaluated; domains on non-partition columns are present in the filter but have no partition-level information to test against. At the file level, the connector tests file-level statistics (e.g., Iceberg manifest min/max, Parquet footer stats) against the filter, which may cover more columns than partition pruning could evaluate. At the row group level, Velox's `ParquetReader` applies the same logic to row group statistics. At the row level, all columns can be evaluated—Velox converts the `TupleDomain` to type-specific filters (hash table lookup for discrete values, range comparison for min/max).
 
 #### 2.9 Serialization
 
@@ -205,10 +220,10 @@ C++ workers serialize filters to JSON for the coordinator to fetch. The format w
 
 ```json
 {
-  "filterType": "tupleDomain",
-  "tupleDomain": {
-    "columnDomains": { ... }
-  }
+   "filterType": "tupleDomain",
+   "tupleDomain": {
+      "columnDomains": { ... }
+   }
 }
 ```
 
@@ -216,8 +231,8 @@ In the future, this could be extended:
 
 ```json
 {
-  "filterType": "bloomFilter",
-  "bloomFilter": { ... }
+   "filterType": "bloomFilter",
+   "bloomFilter": { ... }
 }
 ```
 
@@ -261,7 +276,9 @@ Both error cases degrade gracefully: waiting unnecessarily adds latency but the 
 
 **SPI extension for split manager:**
 
-A new `DynamicFilter` class is passed to `ConnectorSplitManager.getSplits()`. For queries with multiple joins producing multiple dynamic filters on the same probe table, the coordinator combines them into a single `DynamicFilter` containing the union of all covered columns, a constraint future, and a recommended wait duration. The future resolves progressively as individual filters complete, returning the intersection of all complete filters so far. When filter A completes, the future resolves with A's predicate; when filter B completes, it resolves again with the intersection of A and B. This allows the connector to apply filters adaptively as they become available rather than waiting for all filters to complete. The connector can wait upfront, start immediately and apply filters as they arrive, or use a hybrid approach.
+A new `DynamicFilter` class is passed to `ConnectorSplitManager.getSplits()`. For queries with multiple joins producing multiple dynamic filters on the same probe table, the coordinator combines them into a single composite `DynamicFilter` containing the union of all covered columns, a constraint future, and a recommended wait duration. This includes both direct filters (star join: `A JOIN B ON A.x = B.x` and `A JOIN C ON A.y = C.y` both filter A) and transitive filters (chain join: `A.x = B.x` and `B.x = C.x` where the optimizer propagates C's filter to A's table scan through the equality chain, as described in section 2.1).
+
+The composite future resolves progressively as individual filters complete, returning the intersection of all complete filters so far. When filter A completes, the future resolves with A's predicate; when filter B completes, it resolves again with the intersection of A and B. This allows the connector to apply filters adaptively as they become available rather than waiting for all filters to complete. The connector can wait upfront, start immediately and apply filters as they arrive, or use a hybrid approach.
 
 **Protocol extensions:**
 
