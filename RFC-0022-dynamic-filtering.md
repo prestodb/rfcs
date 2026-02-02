@@ -53,7 +53,7 @@ During **query planning**, `AddDynamicFilterRule` (a new optimizer in presto-mai
 
 During **build-side execution**, the `HashBuild` operator collects distinct join key values while constructing the hash table. If cardinality stays below a configurable limit (default 10K), it creates a `TupleDomain` with discrete values for perfect filtering. Otherwise, it falls back to a range (min/max only). Upon completion, the filter is stored in the task's dynamic filter collection.
 
-The **coordinator collects filters** via `DynamicFilterFetcher`, a new component that long-polls each build-side worker's `GET /v1/task/{taskId}/dynamicFilters` endpoint. The endpoint is modeled as a RESTful resource: each GET returns the full collection of filters produced by the task so far, and the coordinator deduplicates on its side by tracking which `(taskId, filterId)` pairs it has already processed. A version header (`X-Presto-Dynamic-Filters-Version`) enables efficient long-polling—the server blocks until new filters are available beyond what the client has already seen.
+The **coordinator collects filters** via `DynamicFilterFetcher`, which long-polls `GET /v1/task/{taskId}/dynamicFilters?since=N` on each build-side worker and sends `DELETE ?through=N` after processing to free worker memory.
 
 For **filter merging**, the coordinator uses the existing `LocalDynamicFilter` to accumulate partial filters from multiple build-side workers (for partitioned joins). It merges using `TupleDomain.columnWiseUnion()` with UNION semantics: since each worker sees a disjoint subset of build data (hash-partitioned), valid join keys are those seen by ANY worker, so discrete values become set unions and ranges expand to cover all workers' min/max bounds. For broadcast joins with a single build worker, the filter is immediately complete.
 
@@ -115,7 +115,7 @@ This ensures only joins explicitly marked by the optimizer produce filters for c
 
 2. **Storage in PrestoTask** (C++): The filter is stored in a new `dynamicFilters_` map in `PrestoTask`, keyed by filter ID. This requires adding a callback from Velox's `Task` to Presto's `PrestoTask` when filters are ready.
 
-3. **Filter fetch** (Java → C++): The coordinator long-polls `GET /v1/task/{taskId}/dynamicFilters`, a RESTful resource endpoint registered in `TaskResource.cpp`. The response always contains the full collection of filters produced by the task so far. The coordinator uses the `X-Presto-Dynamic-Filters-Version` request header to signal what it has already seen, enabling the server to block until new filters are available rather than returning the same state. The coordinator deduplicates responses by tracking processed `(taskId, filterId)` pairs.
+3. **Filter fetch** (Java → C++): The coordinator long-polls `GET /v1/task/{taskId}/dynamicFilters?since=N` and sends `DELETE ?through=N` after processing to free worker memory.
 
 4. **Long-polling**: The endpoint supports `X-Presto-Max-Wait` header (like existing endpoints) so the coordinator can wait up to N seconds for filters to become available, reducing polling overhead.
 
@@ -141,9 +141,7 @@ ALGORITHM BuildFilter(values):
 
 #### 2.4 Filter Collection
 
-The coordinator collects filters through `DynamicFilterFetcher`, a component of `HttpRemoteTask` that long-polls the worker's `GET /v1/task/{taskId}/dynamicFilters` endpoint. The endpoint is a RESTful resource: each response contains the full collection of filters produced by the task, and the coordinator deduplicates by tracking which `(taskId, filterId)` pairs it has already processed. The `X-Presto-Dynamic-Filters-Version` request header enables efficient long-polling—the server blocks until new filters are available beyond what the client reports having seen, avoiding busy-loop polling when no new filters have been produced.
-
-Fetched filters are passed to the coordinator's `LocalDynamicFilter` (created by `SqlQueryScheduler` for each distributed dynamic filter in the query). When a task has multiple `HashBuild` operators completing at different times, the endpoint returns all completed filters in each response and the coordinator processes only the new ones.
+`DynamicFilterFetcher` long-polls `GET /v1/task/{taskId}/dynamicFilters?since=N` to receive only new filters. After processing, it sends `DELETE /v1/task/{taskId}/dynamicFilters?through=N` to free worker memory. Fetched filters are passed to `LocalDynamicFilter` for merging.
 
 #### 2.5 Filter Merging
 
@@ -280,38 +278,21 @@ The composite future resolves progressively as individual filters complete, retu
 
 **Protocol extensions:**
 
-- Add HTTP endpoint `GET /v1/task/{taskId}/dynamicFilters` in C++ workers
-
-**HTTP Endpoint Specification:**
-
-The dynamic filters endpoint is an endpoint that returns the full collection of filters produced by the task.
-
 ```
-GET /v1/task/{taskId}/dynamicFilters
+GET /v1/task/{taskId}/dynamicFilters?since=N
+  Header: X-Presto-Max-Wait: <duration>
+  Returns filters with version > N. Blocks until available or wait expires.
 
-Headers:
-  X-Presto-Dynamic-Filters-Version: <n>  (optional, client's last-seen version)
-  X-Presto-Max-Wait: <duration>  (optional, e.g., "1s")
+  200 OK: { "version": 3, "filters": { "df_1": { ... } } }
+  204 No Content: no new filters before wait expired
+  404 Not Found: task does not exist
 
-Response 200 OK:
-{
-  "version": 3,
-  "filters": {
-    "df_1": {
-      "filterType": "tupleDomain",
-      "tupleDomain": { "columnDomains": { ... } }
-    }
-  }
-}
+DELETE /v1/task/{taskId}/dynamicFilters?through=N
+  Frees filters with version <= N on the worker. Fire-and-forget.
 
-Response 204 No Content:
-  (returned if no new filters beyond version {n} and max-wait expires)
-
-Response 404 Not Found:
-  (task does not exist)
+  204 No Content: acknowledged
+  404 Not Found: task does not exist
 ```
-
-The response always contains all filters produced by the task, not a diff. The `X-Presto-Dynamic-Filters-Version` header is analogous to `X-Presto-Current-State` on the TaskStatus endpoint: it tells the server what the client already knows so the server can block until there is something new, rather than returning immediately with the same state. The coordinator deduplicates on its side by tracking which `(taskId, filterId)` pairs have already been processed.
 
 **No breaking changes**: The new SPI method has a default implementation.
 
@@ -376,7 +357,7 @@ Trino implements a similar push-based architecture: the coordinator collects fil
 
 1. **Optimizer**: Trino generates dynamic filters for all equi-join clauses on INNER/RIGHT joins when the feature is enabled, with no cost model or selectivity check. This RFC uses a cost model that skips generating filters when the join column is not in partition columns or `getColumnsWithRangeStatistics()`, when the build/probe cardinality ratio is above threshold, or when the estimated build cardinality is too high.
 
-2. **Transport**: Both systems use dedicated endpoints for filter collection (`DynamicFiltersFetcher` in Trino, similar fetcher in this RFC). For distribution to probe workers, Trino bundles filters in `TaskUpdateRequest`; this RFC uses a dedicated endpoint.
+2. **Transport**: Both use dedicated long-poll endpoints for filter collection. Trino's GET acknowledges and deletes previously fetched filters as a side effect (non-idempotent). This RFC uses `?since=N` on GET for incremental reads and a separate `DELETE ?through=N` for cleanup, keeping GET idempotent. Trino triggers fetches from TaskStatus version changes (two round trips); this RFC uses a dedicated long-poll (one round trip). The dedicated long-poll costs one idle connection per build-side task, but with Netty's non-blocking I/O this should be negligible. For distribution to probe workers, Trino bundles filters in `TaskUpdateRequest`; this RFC uses a dedicated endpoint.
 
 3. **SPI design**: Both systems combine multiple dynamic filters targeting the same table scan into a single object with progressive resolution—Trino calls this "narrowing." This RFC additionally introduces `getColumnsWithRangeStatistics()` on the table layout, allowing connectors to advertise prunable columns, and the scheduler uses this along with CBO statistics to compute a recommended wait duration passed to the connector. Trino leaves the wait decision entirely to the connector without scheduler guidance.
 
