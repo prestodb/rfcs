@@ -55,7 +55,7 @@ During **build-side execution**, the `HashBuild` operator collects distinct join
 
 The **coordinator collects filters** via `DynamicFilterFetcher`, which long-polls `GET /v1/task/{taskId}/dynamicFilters?since=N` on each build-side worker and sends `DELETE ?through=N` after processing to free worker memory.
 
-For **filter merging**, the coordinator uses the existing `LocalDynamicFilter` to accumulate partial filters from multiple build-side workers (for partitioned joins). It merges using `TupleDomain.columnWiseUnion()` with UNION semantics: since each worker sees a disjoint subset of build data (hash-partitioned), valid join keys are those seen by ANY worker, so discrete values become set unions and ranges expand to cover all workers' min/max bounds. For broadcast joins with a single build worker, the filter is immediately complete.
+For **filter merging**, the coordinator uses `CoordinatorDynamicFilter` to accumulate partial filters from multiple build-side workers (for partitioned joins). It merges using `TupleDomain.columnWiseUnion()` with UNION semantics: since each worker sees a disjoint subset of build data (hash-partitioned), valid join keys are those seen by ANY worker, so discrete values become set unions and ranges expand to cover all workers' min/max bounds. For broadcast joins with a single build worker, the filter is immediately complete.
 
 During **split scheduling**, the scheduler analyzes the table layout's `getColumnsWithRangeStatistics()` and `getStreamPartitioningColumns()` along with the build/probe cardinality ratio to compute a recommended wait duration. The connector receives a `DynamicFilter` object containing the columns covered, the constraint future, and this wait hint—allowing it to wait upfront, start immediately, or use a hybrid approach.
 
@@ -119,7 +119,7 @@ This ensures only joins explicitly marked by the optimizer produce filters for c
 
 4. **Long-polling**: The endpoint supports `X-Presto-Max-Wait` header (like existing endpoints) so the coordinator can wait up to N seconds for filters to become available, reducing polling overhead.
 
-The coordinator then merges filters from all build partitions using `LocalDynamicFilter` and distributes the merged result.
+The coordinator then merges filters from all build partitions using `CoordinatorDynamicFilter` and distributes the merged result.
 
 ```
 ALGORITHM BuildFilter(values):
@@ -141,11 +141,11 @@ ALGORITHM BuildFilter(values):
 
 #### 2.4 Filter Collection
 
-`DynamicFilterFetcher` long-polls `GET /v1/task/{taskId}/dynamicFilters?since=N` to receive only new filters. After processing, it sends `DELETE /v1/task/{taskId}/dynamicFilters?through=N` to free worker memory. Fetched filters are passed to `LocalDynamicFilter` for merging.
+`DynamicFilterFetcher` long-polls `GET /v1/task/{taskId}/dynamicFilters?since=N` to receive only new filters. After processing, it sends `DELETE /v1/task/{taskId}/dynamicFilters?through=N` to free worker memory. Fetched filters are passed to `CoordinatorDynamicFilter` for merging.
 
 #### 2.5 Filter Merging
 
-For partitioned joins with multiple build workers, the coordinator uses the existing `LocalDynamicFilter` to merge partial filters. `SqlQueryScheduler` creates the `LocalDynamicFilter` with the partition count set to the number of build-side tasks (known from the stage execution plan). As `HttpRemoteTask` fetches filters, it passes them to `LocalDynamicFilter` via `getTupleDomainConsumer()`, which accumulates them using `TupleDomain.columnWiseUnion()`. When all build-side tasks have reported, it completes the `resultFuture`.
+For partitioned joins with multiple build workers, the coordinator uses `CoordinatorDynamicFilter` to merge partial filters. `SectionExecutionFactory` pre-registers each filter via `DynamicFilterService` with the expected partition count deferred. After the scheduler determines the actual task count, it calls `setExpectedPartitions()`. As `DynamicFilterFetcher` receives filters, it calls `addPartitionByColumnName()`, which accumulates them using `TupleDomain.columnWiseUnion()`. The filter completes when all expected partitions arrive or the wait timeout expires.
 
 ```
 ALGORITHM MergeFilters(filter1, filter2):
@@ -160,7 +160,7 @@ ALGORITHM MergeFilters(filter1, filter2):
 
 #### 2.6 Scheduler Integration
 
-`SqlQueryExecution` creates a `LocalDynamicFilter` for each dynamic filter in the query. The scheduler analyzes the table layout's `getColumnsWithRangeStatistics()` and `getStreamPartitioningColumns()` along with the build/probe cardinality ratio from `StatsAndCosts` to compute a recommended wait duration. `SplitSourceFactory` passes a `DynamicFilter` object to `SplitManager.getSplits()` containing the columns covered, the constraint future, and this wait hint.
+`SectionExecutionFactory` pre-registers a `CoordinatorDynamicFilter` for each dynamic filter via `DynamicFilterService`. `SplitSourceFactory` looks up filters by matching probe-side variable names to `TableScanNode` outputs, and passes the `DynamicFilter` to `SplitManager.getSplits()` containing the columns covered, the constraint future, and the wait timeout.
 
 #### 2.7 Filter Distribution
 
@@ -190,7 +190,7 @@ The `complete` field indicates this is a fully merged filter safe for pruning. W
 
 **Coordinator-side flow:**
 
-1. `LocalDynamicFilter` completes with merged filter
+1. `CoordinatorDynamicFilter` completes with merged filter
 2. Coordinator identifies probe-side tasks whose plan contains a `TableScanNode` referencing this filter ID
 3. Coordinator calls the endpoint on each probe-side worker
 
@@ -236,13 +236,13 @@ The coordinator deserializes the envelope, then dispatches to the appropriate co
 
 #### 2.10 Module Organization
 
-New components are added to presto-main-base (`AddDynamicFilterRule`) and presto-main (`DynamicFiltersFetcher`), with existing components reused or extended (`LocalDynamicFilter` in presto-main-base, `SourcePartitionedScheduler`). The C++ worker in presto-native-execution adds `TupleDomainBuilder` for filter construction and `TupleDomainParser` for JSON deserialization, plus conversion logic to Velox's type-specific filter classes. Connectors (Hive, Iceberg, Delta) implement partition/file pruning in their split sources, and Velox handles row group and row-level filtering in `ParquetReader` and the scan operators.
+New components are added to presto-main-base (`AddDynamicFilterRule`, `CoordinatorDynamicFilter`, `DynamicFilterService`) and presto-main (`DynamicFilterFetcher`), with existing components extended (`SourcePartitionedScheduler`). `LocalDynamicFilter` remains for local (colocated) dynamic filtering but is not reused for distributed merging, as it requires a fixed partition count at construction, outputs planner-internal `TupleDomain<VariableReferenceExpression>`, and does not implement the `DynamicFilter` SPI. The C++ worker in presto-native-execution adds `TupleDomainBuilder` for filter construction and `TupleDomainParser` for JSON deserialization, plus conversion logic to Velox's type-specific filter classes. Connectors (Hive, Iceberg, Delta) implement partition/file pruning in their split sources, and Velox handles row group and row-level filtering in `ParquetReader` and the scan operators.
 
 #### 2.11 Error Handling and Failure Modes
 
-**Build stage failure**: If the build stage fails before producing filters, the `LocalDynamicFilter` future is completed exceptionally. The split source should handle this by proceeding without the filter (graceful degradation). The query continues but without partition pruning benefit.
+**Build stage failure**: If the build stage fails before producing filters, the `CoordinatorDynamicFilter` future is completed exceptionally. The split source should handle this by proceeding without the filter (graceful degradation). The query continues but without partition pruning benefit.
 
-**Filter collection timeout**: If `dynamic_filter_max_wait_time` expires before all build workers report, `LocalDynamicFilter` completes with `TupleDomain.all()` (no filtering). This prevents indefinite blocking. Connectors that are waiting on the future proceed with all partitions.
+**Filter collection timeout**: If `dynamic_filter_max_wait_time` expires before all build workers report, `CoordinatorDynamicFilter` completes with `TupleDomain.all()` (no filtering) via `completeOnTimeout`. This prevents indefinite blocking. Connectors that are waiting on the future proceed with all partitions.
 
 **Partial filter collection**: If some but not all build workers report before timeout, the coordinator **cannot** use any filter—neither discrete values nor ranges. An unreported worker might have values outside the partial range, and using a partial filter would incorrectly prune valid join keys. The coordinator completes with `TupleDomain.all()` (no filtering). This is the safe choice: we lose the pruning benefit but maintain correctness.
 
@@ -254,9 +254,13 @@ New components are added to presto-main-base (`AddDynamicFilterRule`) and presto
 
 ### 3. API/SPI Changes
 
-**Existing infrastructure reused:**
+**New coordinator components:**
 
-- `LocalDynamicFilter` (presto-main-base): Collects and merges filters using `TupleDomain.columnWiseUnion()`. Provides `getResultFuture()` for async notification when filter is complete.
+- `CoordinatorDynamicFilter` (presto-main-base): Implements `DynamicFilter` SPI. Collects and merges filters from distributed workers using `TupleDomain.columnWiseUnion()`, with deferred partition count, timeout-based completion, and progressive refinement. Registered via `DynamicFilterService`.
+
+- `DynamicFilterService` (presto-main-base): Central concurrent registry keyed by `(QueryId, filterId)`. `SectionExecutionFactory` registers filters and probe-side variable names before split sources are created. `SplitSourceFactory` looks up filters to pass to connectors. `DynamicFilterFetcher` looks up filters to feed in worker partitions. Cleaned up when the query completes.
+
+**Existing infrastructure reused:**
 
 - `JoinNode.getDynamicFilters()` (presto-spi): Already maps filter IDs to build-side variables.
 
@@ -373,7 +377,7 @@ Collect filters from build-side workers and use them for partition/file pruning 
 
 **Scope**:
 - Filter extraction on C++ workers, collection by coordinator
-- `LocalDynamicFilter` merging
+- `CoordinatorDynamicFilter` merging via `DynamicFilterService`
 - New `DynamicFilter` class and SPI method for `ConnectorSplitManager.getSplits()`
 - Hive and Iceberg connector support for partition/file pruning
 
