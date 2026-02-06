@@ -55,7 +55,7 @@ During **build-side execution**, the `HashBuild` operator collects distinct join
 
 The **coordinator collects filters** via `DynamicFilterFetcher`, which long-polls `GET /v1/task/{taskId}/dynamicFilters?since=N` on each build-side worker and sends `DELETE ?through=N` after processing to free worker memory.
 
-For **filter merging**, the coordinator uses `CoordinatorDynamicFilter` to accumulate partial filters from multiple build-side workers (for partitioned joins). It merges using `TupleDomain.columnWiseUnion()` with UNION semantics: since each worker sees a disjoint subset of build data (hash-partitioned), valid join keys are those seen by ANY worker, so discrete values become set unions and ranges expand to cover all workers' min/max bounds. For broadcast joins with a single build worker, the filter is immediately complete.
+For **filter merging**, the coordinator uses `CoordinatorDynamicFilter` to accumulate partial filters from multiple build-side workers (for partitioned joins). Filters are stored internally keyed by filter ID; translation to column name occurs at the SPI boundary when connectors read the constraint. Merging uses `TupleDomain.columnWiseUnion()` with UNION semantics: since each worker sees a disjoint subset of build data (hash-partitioned), valid join keys are those seen by ANY worker, so discrete values become set unions and ranges expand to cover all workers' min/max bounds. For broadcast joins with a single build worker, the filter is immediately complete.
 
 During **split scheduling**, the scheduler analyzes the table layout's `getColumnsWithRangeStatistics()` and `getStreamPartitioningColumns()` along with the build/probe cardinality ratio to compute a recommended wait duration. The connector receives a `DynamicFilter` object containing the columns covered, the constraint future, and this wait hint—allowing it to wait upfront, start immediately, or use a hybrid approach.
 
@@ -88,7 +88,7 @@ Note that for some join orderings, transitivity is implicit. With `HashJoin(A, H
 
 #### 2.2 Runtime Filter Structure
 
-The filter uses Presto's existing `TupleDomain<ColumnHandle>`, which supports both discrete values and ranges. For cardinality ≤10K, the filter contains all distinct values (8N bytes, 0% false positives). For cardinality >10K, it falls back to a range containing only min/max (16 bytes). Memory usage is bounded by a configurable limit on discrete values.
+The filter uses Presto's existing `TupleDomain`, which supports both discrete values and ranges. Internally, filters are keyed by filter ID (`TupleDomain<String>`) from worker through coordinator storage. At the SPI boundary, `CoordinatorDynamicFilter` translates to column name for connector consumption. For cardinality ≤10K, the filter contains all distinct values (8N bytes, 0% false positives). For cardinality >10K, it falls back to a range containing only min/max (16 bytes). Memory usage is bounded by a configurable limit on discrete values.
 
 **Limitation**: Range-only filters may be ineffective for sparse value distributions. For example, if the build side contains values {1, 1000000}, the range [1, 1000000] prunes nothing. This is an accepted trade-off: discrete values provide exact filtering for low-cardinality joins (the common case for dimension tables), while range provides best-effort filtering for high-cardinality joins. Future work may add bloom filters for the high-cardinality case (see Future Work).
 
@@ -145,7 +145,7 @@ ALGORITHM BuildFilter(values):
 
 #### 2.5 Filter Merging
 
-For partitioned joins with multiple build workers, the coordinator uses `CoordinatorDynamicFilter` to merge partial filters. `SectionExecutionFactory` pre-registers each filter via `DynamicFilterService` with the expected partition count deferred. After the scheduler determines the actual task count, it calls `setExpectedPartitions()`. As `DynamicFilterFetcher` receives filters, it calls `addPartitionByColumnName()`, which accumulates them using `TupleDomain.columnWiseUnion()`. The filter completes when all expected partitions arrive or the wait timeout expires.
+For partitioned joins with multiple build workers, the coordinator uses `CoordinatorDynamicFilter` to merge partial filters. `SectionExecutionFactory` pre-registers each filter via `DynamicFilterService` with the expected partition count deferred. After the scheduler determines the actual task count, it calls `setExpectedPartitions()`. As `DynamicFilterFetcher` receives filters, it calls `addPartitionByFilterId()`, which accumulates them using `TupleDomain.columnWiseUnion()`. The filter completes when all expected partitions arrive or the wait timeout expires.
 
 ```
 ALGORITHM MergeFilters(filter1, filter2):
@@ -160,7 +160,9 @@ ALGORITHM MergeFilters(filter1, filter2):
 
 #### 2.6 Scheduler Integration
 
-`SectionExecutionFactory` pre-registers a `CoordinatorDynamicFilter` for each dynamic filter via `DynamicFilterService`. `SplitSourceFactory` looks up filters by matching probe-side variable names to `TableScanNode` outputs, and passes the `DynamicFilter` to `SplitManager.getSplits()` containing the columns covered, the constraint future, and the wait timeout.
+`SectionExecutionFactory` pre-registers a `CoordinatorDynamicFilter` for each dynamic filter via `DynamicFilterService`. `SplitSourceFactory` looks up filters by matching each filter's probe-side variable name to the `TableScanNode`'s output variables, and passes the `DynamicFilter` to `SplitManager.getSplits()` containing the columns covered, the constraint future, and the wait timeout.
+
+**Scheduling deadlock prevention**: When the probe-side split source blocks waiting for a dynamic filter, no splits are produced, so `SourcePartitionedScheduler` has nothing to schedule. But the build pipeline that produces the filter cannot start until tasks are created on worker nodes. `SourcePartitionedScheduler` detects this condition (split source blocked + no tasks scheduled) and forces task creation to break the cycle.
 
 #### 2.7 Filter Distribution
 
@@ -256,9 +258,9 @@ New components are added to presto-main-base (`AddDynamicFilterRule`, `Coordinat
 
 **New coordinator components:**
 
-- `CoordinatorDynamicFilter` (presto-main-base): Implements `DynamicFilter` SPI. Collects and merges filters from distributed workers using `TupleDomain.columnWiseUnion()`, with deferred partition count, timeout-based completion, and progressive refinement. Registered via `DynamicFilterService`.
+- `CoordinatorDynamicFilter` (presto-main-base): Implements `DynamicFilter` SPI. Collects and merges filters from distributed workers using `TupleDomain.columnWiseUnion()`, with deferred partition count, timeout-based completion, and progressive refinement. Stores constraints keyed by filter ID internally; translates to column name at the SPI boundary. Each instance holds the probe-side column name, set at construction. Registered via `DynamicFilterService`.
 
-- `DynamicFilterService` (presto-main-base): Central concurrent registry keyed by `(QueryId, filterId)`. `SectionExecutionFactory` registers filters and probe-side variable names before split sources are created. `SplitSourceFactory` looks up filters to pass to connectors. `DynamicFilterFetcher` looks up filters to feed in worker partitions. Cleaned up when the query completes.
+- `DynamicFilterService` (presto-main-base): Central concurrent registry keyed by `(QueryId, filterId)`. `SectionExecutionFactory` registers filters before split sources are created. `SplitSourceFactory` looks up filters to pass to connectors. `DynamicFilterFetcher` looks up filters to feed in worker partitions. Cleaned up when the query completes.
 
 **Existing infrastructure reused:**
 
