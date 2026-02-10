@@ -22,7 +22,7 @@ The SPI adds a `getColumnsWithRangeStatistics()` method to `ConnectorTableLayout
 
 ### The Problem: Unnecessary I/O in Star Schema Joins
 
-Star schema joins often read massive amounts of data that will be filtered out by the join condition. A typical pattern involves joining a large fact table with a filtered dimension table. Without dynamic filtering, the system reads all rows from the fact table, builds a hash table from the small filtered dimension, then discards most fact rows during the probe phase. The wasted I/O from reading rows that will be immediately filtered out is the core problem this RFC addresses.
+Star schema joins read massive amounts of data that gets filtered out by the join. A large fact table joins with a filtered dimension table: we read all fact rows, build a hash table from the small dimension, then discard most fact rows during probe. This wasted I/O is the problem.
 
 ### Existing Limitations
 
@@ -45,33 +45,41 @@ This RFC enables partition and file pruning for both join types by collecting fi
 
 ## Proposed Implementation
 
-### 1. High-Level Flow
-
-The implementation follows six steps: planning, filter construction, collection, merging, split scheduling, and application.
-
-During **query planning**, `AddDynamicFilterRule` (a new optimizer in presto-main-base) identifies hash joins where the build side is selective. It populates the `dynamicFilters` field on the `JoinNode` (a map from filter ID to join column) and marks the probe-side `TableScanNode` with the corresponding filter ID. The optimizer does not need to know whether the column is a partition column or has file-level statistics—that decision is deferred to the connector.
-
-During **build-side execution**, the `HashBuild` operator collects distinct join key values while constructing the hash table. If cardinality stays below a configurable limit (default 10K), it creates a `TupleDomain` with discrete values for perfect filtering. Otherwise, it falls back to a range (min/max only). Upon completion, the filter is stored in the task's dynamic filter collection.
-
-The **coordinator collects filters** via `DynamicFilterFetcher`, which long-polls `GET /v1/task/{taskId}/dynamicFilters?since=N` on each build-side worker and sends `DELETE ?through=N` after processing to free worker memory.
-
-For **filter merging**, the coordinator uses `CoordinatorDynamicFilter` to accumulate partial filters from multiple build-side workers (for partitioned joins). Filters are stored internally keyed by filter ID; translation to column name occurs at the SPI boundary when connectors read the constraint. Merging uses `TupleDomain.columnWiseUnion()` with UNION semantics: since each worker sees a disjoint subset of build data (hash-partitioned), valid join keys are those seen by ANY worker, so discrete values become set unions and ranges expand to cover all workers' min/max bounds. For broadcast joins with a single build worker, the filter is immediately complete.
-
-During **split scheduling**, the scheduler analyzes the table layout's `getColumnsWithRangeStatistics()` and `getStreamPartitioningColumns()` along with the build/probe cardinality ratio to compute a recommended wait duration. The connector receives a `DynamicFilter` object containing the columns covered, the constraint future, and this wait hint—allowing it to wait upfront, start immediately, or use a hybrid approach.
-
-**Filter application** happens at four levels. The connector's split source (e.g., `HiveSplitSource`, `IcebergSplitSource`) uses the filter to prune partitions and files during split generation by testing partition/file statistics against the filter's range or discrete values. For the remaining levels—row-group and row-level filtering—the coordinator pushes the completed merged filter to probe-side workers via HTTP (Phase 2). Velox's `ParquetReader` then prunes row groups and applies row-level filtering using type-specific filters: `BigintValuesUsingHashTable`/`BigintRange` for integers, `BytesValues`/`BytesRange` for strings, `DoubleRange`/`FloatRange` for floating point, and `TimestampRange` for timestamps.
-
 ![Dynamic Partition Pruning Flow](RFC-0022/RFC-0022-dynamic-filtering-diagram.png)
 
-### 2. Component Details
+### Pruning Levels
 
-#### 2.1 Query Planning
+Filters apply at four levels, each with different information available:
 
-`AddDynamicFilterRule` is a new `PlanOptimizer` that runs after join reordering but before fragment creation. It identifies hash joins where the build side is selective and dynamic filtering would be beneficial. The rule uses a cost model to decide whether to generate a filter, comparing the estimated benefit (probe-side I/O reduction) against the cost (filter collection and distribution overhead).
+| Level | Location | What's Tested | Example Statistics |
+|-------|----------|---------------|-------------------|
+| Partition | Coordinator (split generation) | Partition column values | `dt=2024-01-15` |
+| File | Coordinator (split generation) | File-level min/max | Iceberg manifest, Parquet footer |
+| Row group | Worker (scan operator) | Row group statistics | Parquet row group min/max |
+| Row | Worker (scan operator) | Individual values | Hash lookup or range comparison |
 
-A filter is generated when the join column is a partition column on the probe side (partition pruning is always beneficial), when the join column is in `getColumnsWithRangeStatistics()` and the estimated build/probe cardinality ratio is below a threshold, or when the estimated build cardinality is low enough that discrete values will be collected. When none of these conditions are met, the optimizer skips generating the filter to avoid runtime overhead for filters that won't provide meaningful pruning. This follows the approach used by Doris and Spark.
+The same filter is passed to all levels. Each level evaluates columns it has statistics for; columns without statistics pass through unchecked.
 
-When a beneficial join is identified, the rule populates the `dynamicFilters` field on the `JoinNode` and marks the probe-side `TableScanNode` with the filter ID.
+### Filter Representation
+
+Filters use Presto's existing `TupleDomain`, which supports discrete values and ranges:
+
+- **Discrete values** (cardinality ≤ configurable limit, default 10K): All distinct values stored, ~8 bytes per value. Enables exact membership testing with 0% false positives.
+- **Range** (cardinality > limit): Only min/max stored, 16 bytes total. Enables range overlap testing but may be ineffective for sparse distributions (e.g., {1, 1000000} produces range [1, 1000000] which prunes nothing).
+
+Future work may add bloom filters for high-cardinality cases (see Future Work).
+
+### Query Planning
+
+`AddDynamicFilterRule` is a new `PlanOptimizer` that runs after join reordering but before fragment creation. It generates a dynamic filter when:
+
+1. The join column is a partition column on the probe side (always beneficial)
+2. The join column is in `getColumnsWithRangeStatistics()` and the build/probe cardinality ratio is below 0.5
+3. The estimated build cardinality is below the discrete values limit
+
+When none of these conditions hold, the optimizer skips filter generation to avoid overhead. This follows the approach used by Doris and Spark.
+
+The rule populates the `dynamicFilters` field on `JoinNode` and marks the probe-side `TableScanNode` with the filter ID.
 
 **Transitive filter propagation:**
 
@@ -86,337 +94,155 @@ The rule maintains equivalence sets of columns across joins as it traverses the 
 
 Note that for some join orderings, transitivity is implicit. With `HashJoin(A, HashJoin(B, C))`, B is filtered by C before joining with A, so the filter from B to A already reflects C's filtering without explicit transitive propagation. Explicit transitivity is needed when the intermediate table (B) is on the build side rather than the probe side.
 
-#### 2.2 Runtime Filter Structure
-
-The filter uses Presto's existing `TupleDomain`, which supports both discrete values and ranges. Internally, filters are keyed by filter ID (`TupleDomain<String>`) from worker through coordinator storage. At the SPI boundary, `CoordinatorDynamicFilter` translates to column name for connector consumption. For cardinality ≤10K, the filter contains all distinct values (8N bytes, 0% false positives). For cardinality >10K, it falls back to a range containing only min/max (16 bytes). Memory usage is bounded by a configurable limit on discrete values.
-
-**Limitation**: Range-only filters may be ineffective for sparse value distributions. For example, if the build side contains values {1, 1000000}, the range [1, 1000000] prunes nothing. This is an accepted trade-off: discrete values provide exact filtering for low-cardinality joins (the common case for dimension tables), while range provides best-effort filtering for high-cardinality joins. Future work may add bloom filters for the high-cardinality case (see Future Work).
-
-#### 2.3 Build-Side Construction
+### Build-Side Filter Extraction
 
 Velox already supports dynamic filter pushdown within a driver. When the hash table is ready, `HashProbe` calls `VectorHasher::getFilter()` to create `BigintValues` filters (discrete values), and the driver pushes them down to `TableScan` operators via `Driver::pushdownFilters()`. This works for broadcast joins where build and probe are colocated.
 
 For partitioned joins (build distributed across workers), we need to extract the filter and send it back to the coordinator. The mechanism works as follows:
 
-**How C++ knows to produce filters for coordinator collection:**
+The `JoinNode` protocol message includes a `dynamicFilters` map (filter ID → join column). During plan conversion, `PrestoToVeloxQueryPlan` registers these filter IDs with the Velox `Task`. When `HashBuild::noMoreInput()` completes, it checks for registered filter IDs and extracts filters if present.
 
-The Java coordinator already includes `dynamicFilters` in the `JoinNode` protocol message (a map from filter ID to the join column). When `PrestoToVeloxQueryPlan` converts the Presto plan to a Velox plan, we extract this map and store it in a new field on the Velox `Task`. Specifically:
+Filter extraction calls `table_->hashers()` to get `VectorHasher` objects for join key columns. For low-cardinality keys, `VectorHasher::getFilter()` returns discrete values; for high-cardinality keys (where VectorHasher overflows), we build a range from tracked min/max. The filter is stored in `PrestoTask::dynamicFilters_` for coordinator collection.
 
-- During plan conversion, if `protocol::JoinNode::dynamicFilters` is non-empty, we register each filter ID with the Velox `Task`
-- When `HashBuild::noMoreInput()` completes, it checks if this join has registered filter IDs
-- If so, it extracts filters and reports them to `PrestoTask` for coordinator collection
-- If not (e.g., optimizer didn't select this join for dynamic filtering), no extraction happens
+### Filter Collection and Merging
 
-This ensures only joins explicitly marked by the optimizer produce filters for coordinator collection.
+`DynamicFilterFetcher` long-polls `GET /v1/task/{taskId}/dynamicFilters?since=N` on each build-side worker. After processing, it sends `DELETE?through=N` to free worker memory. The endpoint supports `X-Presto-Max-Wait` for long polling.
 
-**Filter extraction and reporting:**
+For partitioned joins, `CoordinatorDynamicFilter` merges filters from multiple workers using `TupleDomain.columnWiseUnion()`. Since each worker sees a disjoint subset of build data (hash-partitioned), merging uses UNION semantics: discrete values become set unions, ranges expand to cover all workers' min/max bounds. For broadcast joins, a single worker's filter is complete.
 
-1. **Filter extraction** (C++): `HashBuild` completes the hash table and calls `joinBridge_->setHashTable()` to hand it to `HashProbe`. If the join has registered dynamic filter IDs, we call `table_->hashers()` to get the `VectorHasher` objects for join key columns. For low-cardinality keys, `VectorHasher::getFilter()` returns a `BigintValues` filter with discrete values. For high-cardinality keys (where VectorHasher overflows), we build a range filter from the tracked min/max. These are converted to a `TupleDomain` JSON representation.
+`SectionExecutionFactory` pre-registers each filter via `DynamicFilterService`. The filter uses all-or-nothing semantics: `getCurrentConstraint()` returns `TupleDomain.all()` until all expected partitions arrive. Timeout does not count as completion — a timed-out filter returns `all()`, not partial data.
 
-2. **Storage in PrestoTask** (C++): The filter is stored in a new `dynamicFilters_` map in `PrestoTask`, keyed by filter ID. This requires adding a callback from Velox's `Task` to Presto's `PrestoTask` when filters are ready.
+### Scheduler Integration
 
-3. **Filter fetch** (Java → C++): The coordinator long-polls `GET /v1/task/{taskId}/dynamicFilters?since=N` and sends `DELETE ?through=N` after processing to free worker memory.
+`SplitSourceFactory` looks up filters from `DynamicFilterService` and passes them to `ConnectorSplitManager.getSplits()`. The `DynamicFilter` contains the columns covered, the constraint future, and a recommended wait duration.
 
-4. **Long-polling**: The endpoint supports `X-Presto-Max-Wait` header (like existing endpoints) so the coordinator can wait up to N seconds for filters to become available, reducing polling overhead.
+**Deadlock prevention**: When the probe-side split source blocks waiting for a filter, no splits are produced. But the build pipeline producing the filter cannot start until tasks are created. `SourcePartitionedScheduler` detects this (split source blocked + no tasks scheduled) and forces task creation to break the cycle.
 
-The coordinator then merges filters from all build partitions using `CoordinatorDynamicFilter` and distributes the merged result.
+### Filter Distribution
 
-```
-ALGORITHM BuildFilter(values):
-    min ← MAX_INT
-    max ← MIN_INT
-    distinctValues ← empty set
+**Phase 1 (coordinator-side)**: Filters apply during split generation. The connector receives the `DynamicFilter` and decides whether to wait upfront, start immediately, or use a hybrid approach. No distribution to workers needed.
 
-    FOR EACH value IN values:
-        min ← MIN(min, value)
-        max ← MAX(max, value)
-        IF size(distinctValues) < LIMIT:
-            distinctValues.insert(value)
-
-    IF size(distinctValues) < LIMIT:
-        RETURN TupleDomain.discreteValues(distinctValues)
-    ELSE:
-        RETURN TupleDomain.range(min, max)
-```
-
-#### 2.4 Filter Collection
-
-`DynamicFilterFetcher` long-polls `GET /v1/task/{taskId}/dynamicFilters?since=N` to receive only new filters. After processing, it sends `DELETE /v1/task/{taskId}/dynamicFilters?through=N` to free worker memory. Fetched filters are passed to `CoordinatorDynamicFilter` for merging.
-
-#### 2.5 Filter Merging
-
-For partitioned joins with multiple build workers, the coordinator uses `CoordinatorDynamicFilter` to merge partial filters. `SectionExecutionFactory` pre-registers each filter via `DynamicFilterService` with the expected partition count deferred. After the scheduler determines the actual task count, it calls `setExpectedPartitions()`. As `DynamicFilterFetcher` receives filters, it calls `addPartitionByFilterId()`, which accumulates them using `TupleDomain.columnWiseUnion()`. The filter completes when all expected partitions arrive or the wait timeout expires.
-
-```
-ALGORITHM MergeFilters(filter1, filter2):
-    # UNION semantics: each worker sees disjoint subset of build data
-    IF both have discrete values:
-        RETURN union of value sets
-    ELSE IF both have ranges:
-        RETURN range(MIN(min1, min2), MAX(max1, max2))
-    ELSE IF one discrete, one range:
-        RETURN range covering both (discrete values + range bounds)
-```
-
-#### 2.6 Scheduler Integration
-
-`SectionExecutionFactory` pre-registers a `CoordinatorDynamicFilter` for each dynamic filter via `DynamicFilterService`. `SplitSourceFactory` looks up filters by matching each filter's probe-side variable name to the `TableScanNode`'s output variables, and passes the `DynamicFilter` to `SplitManager.getSplits()` containing the columns covered, the constraint future, and the wait timeout.
-
-**Scheduling deadlock prevention**: When the probe-side split source blocks waiting for a dynamic filter, no splits are produced, so `SourcePartitionedScheduler` has nothing to schedule. But the build pipeline that produces the filter cannot start until tasks are created on worker nodes. `SourcePartitionedScheduler` detects this condition (split source blocked + no tasks scheduled) and forces task creation to break the cycle.
-
-#### 2.7 Filter Distribution
-
-**Phase 1: Coordinator-side (partition/file pruning)**
-
-Filters are applied during split generation on the coordinator. The connector receives the `DynamicFilter` with its future and wait hint, then decides how to proceed: wait upfront for maximum pruning, start immediately, or use a hybrid approach. No filter distribution to workers is needed.
-
-**Phase 2: Worker-side (row-group/row-level filtering)**
-
-The coordinator pushes the merged filter to probe-side workers via a new endpoint:
+**Phase 2 (worker-side)**: The coordinator pushes merged filters to probe-side workers:
 
 ```
 POST /v1/task/{taskId}/inputs/filter/{filterId}
-
-Body:
-{
-  "complete": true,
-  "filterType": "tupleDomain",
-  "tupleDomain": { "columnDomains": { ... } }
-}
-
-Response 200 OK
-Response 404 Not Found (task does not exist)
+Body: { "complete": true, "filterType": "tupleDomain", "tupleDomain": { ... } }
 ```
 
-The `complete` field indicates this is a fully merged filter safe for pruning. Workers reject filters where `complete: false`.
+Workers verify `complete: true`, then call `veloxTask->addDynamicFilter()` to inject the filter. Velox applies it to row groups (via `ParquetReader` statistics) and rows (via type-specific filters like `BigintValuesUsingHashTable` for discrete values).
 
-**Coordinator-side flow:**
+Probe execution may start before the filter arrives—early splits proceed without row-level filtering but still benefit from partition/file pruning.
 
-1. `CoordinatorDynamicFilter` completes with merged filter
-2. Coordinator identifies probe-side tasks whose plan contains a `TableScanNode` referencing this filter ID
-3. Coordinator calls the endpoint on each probe-side worker
+### Serialization
 
-**Worker-side flow:**
+C++ workers serialize filters to JSON with a `filterType` envelope for future extensibility (e.g., bloom filters). Size scales linearly: ~8KB for 1K values, ~80KB for 10K values, <1KB for range-only.
 
-1. `PrestoTask` receives filter, verifies `complete: true`, stores in task-level map
-2. Calls `veloxTask->addDynamicFilter(filterId, filter)` to inject into Velox
-3. Velox's `TableScan` (which registered interest in this filter ID during plan conversion) applies filter at two levels:
-   - **Row-group pruning**: `ParquetReader` tests row group statistics against the filter's range
-   - **Row-level filtering**: Values tested against type-specific Velox filters (hash lookup for discrete values, range comparison for min/max)
+### Module Organization
 
-**Timing**: Probe execution may start before the filter arrives. Early splits proceed without row-level filtering but still benefit from Phase 1 partition/file pruning. When the filter arrives mid-execution, Velox applies it to subsequent row groups and rows.
+| Module | New Components |
+|--------|---------------|
+| presto-main-base | `AddDynamicFilterRule`, `CoordinatorDynamicFilter`, `DynamicFilterService` |
+| presto-main | `DynamicFilterFetcher` |
+| presto-native-execution | `TupleDomainBuilder`, `TupleDomainParser`, Velox filter conversion |
+| Connectors | Partition/file pruning in split sources |
 
-#### 2.8 Filter Application
+`LocalDynamicFilter` remains for colocated dynamic filtering but is not reused—it requires fixed partition count at construction and doesn't implement the `DynamicFilter` SPI.
 
-The complete filter—containing domains on all columns from all contributing joins—is passed unchanged to every pruning level. Each level evaluates the columns it has information for; domains on columns without available statistics pass through unchecked. Deeper levels have more information available, so more of the filter is exercised as pruning cascades.
+### Error Handling
 
-At the partition level, the connector's split source (e.g., `HiveSplitSource`, `IcebergSplitSource`) tests partition values against the filter. Only columns that are partition columns can be evaluated; domains on non-partition columns are present in the filter but have no partition-level information to test against. At the file level, the connector tests file-level statistics (e.g., Iceberg manifest min/max, Parquet footer stats) against the filter, which may cover more columns than partition pruning could evaluate. At the row group level, Velox's `ParquetReader` applies the same logic to row group statistics. At the row level, all columns can be evaluated—Velox converts the `TupleDomain` to type-specific filters (hash table lookup for discrete values, range comparison for min/max).
+All failure modes degrade gracefully to no filtering (`TupleDomain.all()`):
 
-#### 2.9 Serialization
+- **Build stage failure**: Future completes exceptionally; split source proceeds without filter
+- **Timeout**: `distributed_dynamic_filter_max_wait_time` expires before all workers report; filter returns `all()`
+- **Partial collection**: All-or-nothing — filter returns `all()` until all expected partitions arrive
+- **Memory pressure**: Falls back to range-only during construction
 
-C++ workers serialize filters to JSON for the coordinator to fetch. The format wraps the filter in an envelope that identifies the filter type, allowing future extension to bloom filters:
+Worker restarts and network partitions are handled by existing task failure mechanisms.
 
-```json
-{
-   "filterType": "tupleDomain",
-   "tupleDomain": {
-      "columnDomains": { ... }
-   }
-}
-```
-
-In the future, this could be extended:
-
-```json
-{
-   "filterType": "bloomFilter",
-   "bloomFilter": { ... }
-}
-```
-
-The coordinator deserializes the envelope, then dispatches to the appropriate codec (`JsonCodec<TupleDomain<ColumnHandle>>` for Phase 1). For the return path (coordinator to probe-side workers), the same envelope format is used. Size scales linearly with cardinality: ~8KB for 1K values, ~80KB for 10K values, and <1KB for range-only filters.
-
-#### 2.10 Module Organization
-
-New components are added to presto-main-base (`AddDynamicFilterRule`, `CoordinatorDynamicFilter`, `DynamicFilterService`) and presto-main (`DynamicFilterFetcher`), with existing components extended (`SourcePartitionedScheduler`). `LocalDynamicFilter` remains for local (colocated) dynamic filtering but is not reused for distributed merging, as it requires a fixed partition count at construction, outputs planner-internal `TupleDomain<VariableReferenceExpression>`, and does not implement the `DynamicFilter` SPI. The C++ worker in presto-native-execution adds `TupleDomainBuilder` for filter construction and `TupleDomainParser` for JSON deserialization, plus conversion logic to Velox's type-specific filter classes. Connectors (Hive, Iceberg, Delta) implement partition/file pruning in their split sources, and Velox handles row group and row-level filtering in `ParquetReader` and the scan operators.
-
-#### 2.11 Error Handling and Failure Modes
-
-**Build stage failure**: If the build stage fails before producing filters, the `CoordinatorDynamicFilter` future is completed exceptionally. The split source should handle this by proceeding without the filter (graceful degradation). The query continues but without partition pruning benefit.
-
-**Filter collection timeout**: If `dynamic_filter_max_wait_time` expires before all build workers report, `CoordinatorDynamicFilter` completes with `TupleDomain.all()` (no filtering) via `completeOnTimeout`. This prevents indefinite blocking. Connectors that are waiting on the future proceed with all partitions.
-
-**Partial filter collection**: If some but not all build workers report before timeout, the coordinator **cannot** use any filter—neither discrete values nor ranges. An unreported worker might have values outside the partial range, and using a partial filter would incorrectly prune valid join keys. The coordinator completes with `TupleDomain.all()` (no filtering). This is the safe choice: we lose the pruning benefit but maintain correctness.
-
-**Worker restart mid-query**: If a build worker restarts, the coordinator detects task failure through the existing mechanism and fails the query. Dynamic filters do not introduce new failure modes here.
-
-**Network partition**: If the coordinator cannot reach a worker to fetch filters, the existing task status polling will eventually detect the unreachable worker and fail the query or retry.
-
-**Memory pressure**: If discrete value collection exceeds limits, the filter falls back to range-only during construction (not a failure). If the coordinator's memory is pressured, it can complete with partial filters early.
-
-### 3. API/SPI Changes
-
-**New coordinator components:**
-
-- `CoordinatorDynamicFilter` (presto-main-base): Implements `DynamicFilter` SPI. Collects and merges filters from distributed workers using `TupleDomain.columnWiseUnion()`, with deferred partition count, timeout-based completion, and progressive refinement. Stores constraints keyed by filter ID internally; translates to column name at the SPI boundary. Each instance holds the probe-side column name, set at construction. Registered via `DynamicFilterService`.
-
-- `DynamicFilterService` (presto-main-base): Central concurrent registry keyed by `(QueryId, filterId)`. `SectionExecutionFactory` registers filters before split sources are created. `SplitSourceFactory` looks up filters to pass to connectors. `DynamicFilterFetcher` looks up filters to feed in worker partitions. Cleaned up when the query completes.
-
-**Existing infrastructure reused:**
-
-- `JoinNode.getDynamicFilters()` (presto-spi): Already maps filter IDs to build-side variables.
+### API/SPI Changes
 
 **SPI extension for table layout:**
 
-A new `getColumnsWithRangeStatistics()` method on `ConnectorTableLayout` allows connectors to advertise which columns have range statistics (min/max) tracked at a granularity that enables efficient predicate evaluation before reading rows. This includes partition columns, columns with manifest or block statistics, and indexed columns in databases. The default implementation returns partition columns only. Iceberg, Delta, and Hudi would return all columns since they track min/max in manifests; Hive would return partition columns; JDBC connectors might return indexed columns.
+```java
+// ConnectorTableLayout
+default Set<ColumnHandle> getColumnsWithRangeStatistics() {
+    return getStreamPartitioningColumns().orElse(Set.of());
+}
+```
 
-**Wait hint computation:**
-
-The scheduler computes a recommended wait duration using information from the layout and existing cost-based statistics. Research on semi-join reduction[^1] establishes that filters are beneficial when `selectivity × probe_IO_cost > wait_cost`. The scheduler checks if the filter covers columns in `getColumnsWithRangeStatistics()` or `getStreamPartitioningColumns()`, and uses the build/probe cardinality ratio from `StatsAndCosts`. This hint is passed to the connector, which makes the final decision on how to handle the future.
-
-Both error cases degrade gracefully: waiting unnecessarily adds latency but the query completes; not waiting wastes some I/O but later splits still benefit from the filter when it arrives.
+Connectors advertise which columns have min/max statistics enabling predicate evaluation before reading rows. Iceberg/Delta/Hudi return all columns (manifest stats); Hive returns partition columns; JDBC might return indexed columns.
 
 **SPI extension for split manager:**
 
-A new `DynamicFilter` class is passed to `ConnectorSplitManager.getSplits()`. For queries with multiple joins producing multiple dynamic filters on the same probe table, the coordinator combines them into a single composite `DynamicFilter` containing the union of all covered columns, a constraint future, and a recommended wait duration. This includes both direct filters (star join: `A JOIN B ON A.x = B.x` and `A JOIN C ON A.y = C.y` both filter A) and transitive filters (chain join: `A.x = B.x` and `B.x = C.x` where the optimizer propagates C's filter to A's table scan through the equality chain, as described in section 2.1).
-
-The composite future resolves progressively as individual filters complete, returning the intersection of all complete filters so far. When filter A completes, the future resolves with A's predicate; when filter B completes, it resolves again with the intersection of A and B. This allows the connector to apply filters adaptively as they become available rather than waiting for all filters to complete. The connector can wait upfront, start immediately and apply filters as they arrive, or use a hybrid approach.
+`ConnectorSplitManager.getSplits()` receives a `DynamicFilter` containing covered columns, a constraint future, and a recommended wait duration. For multiple joins on the same probe table, filters are combined into a single composite that resolves progressively as individual filters complete.
 
 **Protocol extensions:**
 
 ```
-GET /v1/task/{taskId}/dynamicFilters?since=N
-  Header: X-Presto-Max-Wait: <duration>
-  Returns filters with version > N. Blocks until available or wait expires.
-
-  200 OK: { "version": 3, "filters": { "df_1": { ... } } }
-  204 No Content: no new filters before wait expired
-  404 Not Found: task does not exist
-
-DELETE /v1/task/{taskId}/dynamicFilters?through=N
-  Frees filters with version <= N on the worker. Fire-and-forget.
-
-  204 No Content: acknowledged
-  404 Not Found: task does not exist
+GET  /v1/task/{taskId}/dynamicFilters?since=N   # Long-poll for new filters
+DELETE /v1/task/{taskId}/dynamicFilters?through=N  # Free worker memory
+POST /v1/task/{taskId}/inputs/filter/{filterId}    # Push filter to probe worker
 ```
 
-**No breaking changes**: The new SPI method has a default implementation.
+**No breaking changes**: New SPI methods have default implementations.
 
-### 4. User-Facing Configuration and Metrics
+### Configuration and Metrics
 
 **Configuration**:
 
 ```properties
-# System config
-dynamic-filter.enabled=true
-dynamic-filter.max-wait-time=0s
-dynamic-filter.max-size=1MB
-dynamic-filter.distinct-values-limit=10000
-dynamic-filter.queue-threshold=0.7
+distributed-dynamic-filter.enabled=true
+distributed-dynamic-filter.max-wait-time=0s              # Default: no waiting (opt-in)
+distributed-dynamic-filter.max-size=1MB
+distributed-dynamic-filter.distinct-values-limit=10000   # Above this, fall back to range
 ```
 
-**Session properties**:
-
-```sql
-set session dynamic_filter_max_wait_time='500ms';
-set session dynamic_filter_max_size='2MB';
-set session dynamic_filter_enabled=false;
-```
+The `distributed-` prefix distinguishes from the existing built-in local dynamic filtering (`enable_dynamic_filtering`). The two modes are mutually exclusive — enabling both throws `INVALID_SESSION_PROPERTY`.
 
 **Metrics** (exposed in query JSON):
 
-Metrics are organized into three categories: timing, pruning, and decision quality.
-
-**Timing metrics** capture when key events occurred: filter completion time (when the merged filter became available), split generation start time, actual wait time used by the connector, and recommended wait time from the scheduler.
-
-**Pruning metrics** measure effectiveness: total files considered, files pruned by the filter, files scheduled before the filter was ready, and—critically—files scheduled before the filter that would have been pruned if the filter had been available (the retroactive check).
-
-**Decision quality metrics** are derived from timing and pruning:
-- **Pruning rate** (files pruned / total files): If low, waiting wasn't worthwhile.
-- **Missed opportunity rate** (files scheduled early that would have pruned / files scheduled early): If high, the wait time should be increased.
-- **Wait efficiency** (actual wait minus filter completion time): Negative means the connector gave up too early; large positive means it waited longer than necessary.
-
-These metrics enable tuning: consistently high missed opportunity rates suggest increasing wait time; consistently low pruning rates suggest decreasing wait time or adjusting selectivity thresholds. Aggregating these metrics by table and column over many queries enables data-driven parameter tuning.
+- **Timing**: filter completion time, actual wait, recommended wait
+- **Pruning**: total files, files pruned, files scheduled before filter ready
+- **Missed opportunities**: files scheduled early that would have been pruned (enables wait time tuning)
 
 ## Other Approaches Considered
 
 ### Alternative: Bloom Filters for High Cardinality
 
-**Approach**: Use bloom filters (DataSketches) for joins with >10K distinct values.
-
-**Pros**:
-- Bounded memory
-- Handles high cardinality joins efficiently
-- Probabilistic pruning better than no pruning
-
-**Cons**:
-- Only helps at row filtering level (not partition/file/row group pruning)
-- Bloom filters too conservative for definitive pruning (false positive rate)
-- Adds significant complexity: DataSketches dependency, custom serialization, merge logic
-- Primary benefit is I/O reduction (partition/file pruning), which bloom doesn't help
-
-**Why rejected**: Bloom filters cannot be used for partition/file/row-group pruning because they only support exact membership tests, not range overlap tests against column statistics. The primary benefit of dynamic filtering is I/O reduction from pruning at those levels, which requires discrete values or ranges.
+Rejected because bloom filters only support exact membership tests, not range overlap tests against column statistics. The primary benefit of dynamic filtering is I/O reduction from partition/file pruning, which requires discrete values or ranges. Bloom filters would only help at row-level filtering—deferred to future work.
 
 ### Comparison: Trino's Dynamic Filtering
 
-Trino implements a similar push-based architecture: the coordinator collects filters from build-side workers and pushes them to probe-side workers. The main differences are:
+Trino uses a similar push-based architecture. Key differences:
 
-1. **Optimizer**: Trino generates dynamic filters for all equi-join clauses on INNER/RIGHT joins when the feature is enabled, with no cost model or selectivity check. This RFC uses a cost model that skips generating filters when the join column is not in partition columns or `getColumnsWithRangeStatistics()`, when the build/probe cardinality ratio is above threshold, or when the estimated build cardinality is too high.
-
-2. **Transport**: Both use dedicated long-poll endpoints for filter collection. Trino's GET acknowledges and deletes previously fetched filters as a side effect (non-idempotent). This RFC uses `?since=N` on GET for incremental reads and a separate `DELETE ?through=N` for cleanup, keeping GET idempotent. Trino triggers fetches from TaskStatus version changes (two round trips); this RFC uses a dedicated long-poll (one round trip). The dedicated long-poll costs one idle connection per build-side task, but with Netty's non-blocking I/O this should be negligible. For distribution to probe workers, Trino bundles filters in `TaskUpdateRequest`; this RFC uses a dedicated endpoint.
-
-3. **SPI design**: Both systems combine multiple dynamic filters targeting the same table scan into a single object with progressive resolution—Trino calls this "narrowing." This RFC additionally introduces `getColumnsWithRangeStatistics()` on the table layout, allowing connectors to advertise prunable columns, and the scheduler uses this along with CBO statistics to compute a recommended wait duration passed to the connector. Trino leaves the wait decision entirely to the connector without scheduler guidance.
-
-4. **Runtime**: Trino targets Java workers; this RFC targets C++/Velox.
+| Aspect | This RFC | Trino |
+|--------|----------|-------|
+| Optimizer | Cost model (skips low-value filters) | All equi-joins |
+| Transport | Idempotent GET with separate DELETE | GET has delete side effect |
+| SPI | `getColumnsWithRangeStatistics()` + wait hint | Connector decides wait |
+| Runtime | C++/Velox | Java |
 
 The core collection and distribution mechanisms are architecturally similar.
 
 ## Rollout
 
-### Phase 1: Coordinator-Side Pruning
+**Phase 1**: Coordinator-side pruning (partition/file). Filter extraction, collection, merging, and connector integration. Delivers the primary I/O reduction benefit.
 
-Collect filters from build-side workers and use them for partition/file pruning during split generation on the coordinator. This phase delivers the primary I/O reduction benefit.
+**Phase 2**: Worker-side filtering (row-group/row). Push merged filters to probe workers for Velox integration.
 
-**Scope**:
-- Filter extraction on C++ workers, collection by coordinator
-- `CoordinatorDynamicFilter` merging via `DynamicFilterService`
-- New `DynamicFilter` class and SPI method for `ConnectorSplitManager.getSplits()`
-- Hive and Iceberg connector support for partition/file pruning
+**No breaking changes**: Feature is opt-in (0s default wait). New SPI methods have defaults.
 
-**Not included**: Row-group and row-level filtering on workers (filters stay on coordinator).
+**Future work**: Java worker support, bloom filter integration for high-cardinality joins, cost-based timeout calculation.
 
-### Phase 2: Worker-Side Filtering
+## Overhead
 
-Distribute merged filters back to probe-side workers for row-group and row-level filtering. This phase adds incremental benefit beyond partition/file pruning.
+Filter collection adds one long-poll connection per build-side task (negligible with Netty's non-blocking I/O) plus JSON serialization (~80KB for 10K values). The cost model ensures filters are only generated when the expected I/O reduction exceeds this overhead.
 
-**Scope**:
-- New endpoint `POST /v1/task/{taskId}/inputs/filter/{filterId}` for coordinator to push filters
-- Worker-side storage and injection into Velox via `Task::addDynamicFilter()`
-- Velox row-group pruning in `ParquetReader`
-- Velox row-level filtering via type-specific filters
-
-### Impact on Existing Users
-
-**No breaking changes**:
-- Feature is opt-in (0s default wait time)
-- Existing queries run unchanged
-- No SPI breaking changes (default methods provided)
-
-### Future Work (Out of Scope)
-
-The following enhancements are explicitly deferred:
-
-1. **Java worker support**: Extend filtering to Java-based execution
-2. **Bloom filter integration**: For high-cardinality joins (>10K), use `Constraint.predicate()` to wrap a bloom filter for row-level filtering while using range in `getSummary()` for partition/file pruning
-3. **Cost-based timeout**: Automatically calculate wait time based on estimated build time
+Dynamic filters compose with existing predicate pushdown—static predicates are pushed at planning time, dynamic filters add runtime constraints. Both feed into the same `TupleDomain` evaluation path.
 
 ## Test Plan
 
 - **Unit tests**: Filter construction, JSON serialization round-trip, merge logic (Java and C++)
 - **Integration tests**: End-to-end query with filter distribution, multi-worker partitioned joins, graceful degradation on failure
 - **Connector tests**: Iceberg manifest pruning
-- **Performance**: TPC-DS queries with selective dimension filters—Q5, Q17, Q25, Q35 showed >50% improvement with dynamic partition pruning in Trino benchmarks; Q1, Q7 showed 30-50% improvement
-
-## References
-
-[^1]: Bernstein & Chiu, ["Using Semi-Joins to Solve Relational Queries,"](https://dl.acm.org/doi/10.1145/322234.322238) JACM 1981
+- **Performance**: TPC-DS queries with selective dimension filters (Q5, Q17, Q25, Q35 showed >50% improvement in Trino benchmarks)
