@@ -2,7 +2,9 @@
 
 ## Proposers
 
+* frankobe
 * Weixin Xu
+* Zac Blanco
 
 ## Related Issues
 
