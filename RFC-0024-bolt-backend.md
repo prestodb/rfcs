@@ -1,4 +1,4 @@
-# RFC-0023: Introduce Bolt Backend for Presto Native Execution
+# RFC-0024: Introduce Bolt Backend for Presto Native Execution
 
 ## Proposers
 
