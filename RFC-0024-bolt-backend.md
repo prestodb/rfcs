@@ -14,7 +14,7 @@
 ---
 
 ## Summary
-
+![Distributed_procedure_architecture](RFC-0024/RFC-0024-bolt-backend-implement-workflow.png)
 This RFC introduces Bolt as an additional backend for Presto's native worker implementation.
 
 The initial implementation keeps the existing Velox-based worker unchanged and adds a sibling module, `presto-bolt-execution`, that implements the same Presto worker protocol against Bolt. The coordinator, query protocol, and external worker model remain unchanged.
