@@ -357,4 +357,4 @@ The RFC should describe that implementation directly:
 
 1. How will future divergence between Bolt, Velox, and Presto be handled, especially when protocol or interface changes are not fully compatible across projects?
 
-2. How should unsupported Bolt plan capabilities be communicated to the coordinator so the planner can avoid generating incompatible plans?
+2. When multiple homogeneous backend pools are deployed, how can the planner avoid generating plans that the target backend pool cannot execute?
