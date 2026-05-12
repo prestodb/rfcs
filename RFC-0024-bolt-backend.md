@@ -14,7 +14,6 @@
 ---
 
 ## Summary
-![Distributed_procedure_architecture](RFC-0024/RFC-0024-bolt-backend-implement-workflow.png)
 This RFC introduces Bolt as an additional backend for Presto's native worker implementation.
 
 The initial implementation keeps the existing Velox-based worker unchanged and adds a sibling module, `presto-bolt-execution`, that implements the same Presto worker protocol against Bolt. The coordinator, query protocol, and external worker model remain unchanged.
@@ -58,7 +57,7 @@ This allows us to add a second backend without changing the Java coordinator.
 ---
 
 ## Proposed Implementation
-
+![Distributed_procedure_architecture](RFC-0024/RFC-0024-bolt-backend-implement-workflow.png)
 ### High-Level Shape
 
 The initial implementation adds a new top-level module:
@@ -112,8 +111,6 @@ The RFC draft should be explicit that the architecture change in this PR is incr
 
 The Bolt implementation reuses a small number of assets from `presto-native-execution`:
 
-* generic task initialization helper extracted to `presto-native-execution/presto_cpp/main/task/TaskManagerHelpers.h`
-* generic task stats helper extracted to `presto-native-execution/presto_cpp/main/task/PrestoTaskStatsHelpers.h`
 * small HTTP filter helper headers extracted for shared formatting and response behavior
 * shared runtime-metrics helper header for Prometheus registry plumbing
 * existing thrift base definitions and thrift-generation support files
@@ -263,10 +260,8 @@ This suite covers:
 * task submission and result retrieval
 * TPCH query correctness
 * Hive connector behavior
-* Iceberg behavior
 * writer/CTAS flows
 * plan validation
-* remote-function flows
 * configuration-sensitive behavior such as thrift transport and storage format variants
 
 The current module already organizes subsets with test groups such as:
@@ -297,8 +292,9 @@ To keep Bolt testing cost under control, the initial plan is to reuse the same k
 
 * same Java coordinator-side test harness pattern
 * same `PRESTO_SERVER` / `DATA_DIR` / `WORKER_COUNT` contract
-* same TPCH/Hive/Iceberg data layout conventions
+* same TPCH/Hive data layout conventions
 * same small container smoke topology
+* same native tests from `presto-native-tests`
 * same Docker build profile shape for coordinator + worker images
 
 The main thing that changes between backends is the worker binary or worker image. The coordinator artifact, test query patterns, and data conventions stay the same.
@@ -313,10 +309,10 @@ CI for Bolt should be split into a few clear lanes:
    Build `presto-bolt-execution` and run module-local `ctest`.
 
 2. **Java external-worker correctness**
-   Build the Bolt worker once, then run the Java native-worker suites against that worker binary using `PRESTO_SERVER`.
+   Build the Bolt worker once, then run the Java native-worker suites against that worker binary using `PRESTO_SERVER` including 'presto-native-tests'.
 
 3. **Focused optional lanes**
-   Run heavier or specialized groups separately, for example `parquet` and `remote-function`.
+   Run heavier or specialized groups separately, for example `parquet`.
 
 4. **Container smoke**
    Build the coordinator and Bolt worker images and run a small Testcontainers smoke suite.
@@ -330,7 +326,7 @@ A practical local workflow is:
 1. build the Bolt worker in `presto-bolt-execution`
 2. run C++ unit tests
 3. run targeted Java external-worker tests with `PRESTO_SERVER=<bolt worker binary>`
-4. run container smoke tests only when validating packaging/image changes
+4. run 'presto-native-tests' with `PRESTO_SERVER=<bolt worker binary>`
 
 This gives a fast local loop while preserving comparability with CI.
 
@@ -356,3 +352,9 @@ The RFC should describe that implementation directly:
 * unchanged coordinator contract,
 * small shared extracts instead of a large framework refactor,
 * layered testing that reuses the same coordinator model, data layout, and container topology instead of duplicating heavyweight resources.
+
+## TBD
+
+1. How will future divergence between Bolt, Velox, and Presto be handled, especially when protocol or interface changes are not fully compatible across projects?
+
+2. How should unsupported Bolt plan capabilities be communicated to the coordinator so the planner can avoid generating incompatible plans?
