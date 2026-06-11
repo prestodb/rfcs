@@ -191,6 +191,8 @@ In other words, build-time and deployment-time backend selection is explicit and
 
 Repo-wide reactor integration and cleaner root-level build switching can be added later, but they are not part of the current PR and should not be described as already implemented.
 
+Another follow-up is to move shared thrift inputs, protocol base YAML files, and helper headers out of `presto-native-execution` into a new top-level `presto-native-common/` module. The intent is for Velox and Bolt to depend on that module as siblings, rather than having Bolt depend directly on selected files under `presto-native-execution`. This should land as a separate mechanical PR after the initial Bolt backend PR.
+
 ---
 
 ## Protocol and Thrift Strategy
@@ -264,6 +266,8 @@ This suite covers:
 * plan validation
 * configuration-sensitive behavior such as thrift transport and storage format variants
 
+The `presto-native-tests` harness is reused as-is against the Bolt worker. Bolt-specific gaps relative to Presto Java are tracked with a small skip list, and the expectation is to shrink that skip list over time as Bolt closes backend compatibility gaps.
+
 The current module already organizes subsets with test groups such as:
 
 * default suite
@@ -309,7 +313,7 @@ CI for Bolt should be split into a few clear lanes:
    Build `presto-bolt-execution` and run module-local `ctest`.
 
 2. **Java external-worker correctness**
-   Build the Bolt worker once, then run the Java native-worker suites against that worker binary using `PRESTO_SERVER` including 'presto-native-tests'.
+   Build the Bolt worker once, then run the Java native-worker suites against that worker binary using `PRESTO_SERVER`, including `presto-native-tests`.
 
 3. **Focused optional lanes**
    Run heavier or specialized groups separately, for example `parquet`.
@@ -326,7 +330,7 @@ A practical local workflow is:
 1. build the Bolt worker in `presto-bolt-execution`
 2. run C++ unit tests
 3. run targeted Java external-worker tests with `PRESTO_SERVER=<bolt worker binary>`
-4. run 'presto-native-tests' with `PRESTO_SERVER=<bolt worker binary>`
+4. run `presto-native-tests` with `PRESTO_SERVER=<bolt worker binary>`
 
 This gives a fast local loop while preserving comparability with CI.
 
@@ -337,6 +341,7 @@ This gives a fast local loop while preserving comparability with CI.
 * The current implementation is not yet a repo-wide selectable backend in the root Maven reactor.
 * `presto-bolt-execution` currently depends on sibling sources from `presto-native-execution`.
 * The shared surface between backends is intentionally small, so some source duplication remains in the initial landing.
+* The native sidecar integration is currently Velox-shaped. Bolt clusters should run with the sidecar plugin disabled until Bolt registers its own callbacks behind the same HTTP endpoint shapes.
 * Testing is designed to reuse datasets and harness patterns, but further consolidation of duplicated test sources can happen later.
 
 ---
