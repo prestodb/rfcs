@@ -342,6 +342,7 @@ This gives a fast local loop while preserving comparability with CI.
 * `presto-bolt-execution` currently depends on sibling sources from `presto-native-execution`.
 * The shared surface between backends is intentionally small, so some source duplication remains in the initial landing.
 * The native sidecar integration is currently Velox-shaped. Bolt clusters should run with the sidecar plugin disabled until Bolt registers its own callbacks behind the same HTTP endpoint shapes.
+* Plan validation is currently worker-side through `BoltPlanValidator`, so an unsupported plan can fail only after the coordinator has emitted and dispatched it. For homogeneous Bolt pools, planned mitigations are a static capability description on the coordinator to prune unsupported features at plan time, and wiring `/v1/bolt/plan` as a pre-schedule check.
 * Testing is designed to reuse datasets and harness patterns, but further consolidation of duplicated test sources can happen later.
 
 ---
@@ -362,4 +363,4 @@ The RFC should describe that implementation directly:
 
 1. How will future divergence between Bolt, Velox, and Presto be handled, especially when protocol or interface changes are not fully compatible across projects?
 
-2. When multiple homogeneous backend pools are deployed, how can the planner avoid generating plans that the target backend pool cannot execute?
+2. When multiple backend pools are deployed, how can the planner choose a compatible backend pool for each query without per-query mixed-backend scheduling?
