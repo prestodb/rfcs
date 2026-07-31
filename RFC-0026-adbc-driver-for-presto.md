@@ -139,14 +139,6 @@ No Presto server or client modules change. The driver is a new repository (`adbc
 - `github.com/adbc-drivers/driverbase-go` (`driverbase`, `sqlwrapper`, `validation`)
 - `github.com/apache/arrow-adbc/go/adbc` and `github.com/apache/arrow-go/v18`
 
-## [Optional] Metrics
-
-Impact can be measured by:
-
-- Adoption: driver downloads/imports, GitHub stars/issues on the driver repository
-- Ecosystem reach: inclusion in ADBC driver manager documentation and package indexes alongside the Trino/PostgreSQL/Snowflake drivers
-- Community signal: issues and PRs from users running the driver against production Presto clusters
-
 ## Adoption Plan
 
 - **Impact on existing users: none.** The driver is a new, client-side component. No new session parameters, configuration properties, SPI changes, or SQL grammar in Presto itself.
