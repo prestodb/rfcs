@@ -9,7 +9,9 @@ Proposers
 ## [Related Issues]
 
 * apache/hudi#18308 tracks the broader Hudi-on-Velox effort.
-* facebookincubator/velox#15790 adds a native Avro reader to Velox. This proposal depends on it for reading Avro-encoded log blocks.
+* prestodb/presto#28148 tracks the Presto implementation.
+* facebookincubator/velox#18228 tracks the native Avro reader work. This proposal depends on it for reading Avro-encoded log blocks.
+* facebookincubator/velox#15790 is the original Avro reader prototype.
 * facebookincubator/velox#18530 is the companion enhancement issue for the Velox side of this proposal.
 
 ## Summary
@@ -26,7 +28,9 @@ Hudi MERGE_ON_READ tables store data as base Parquet files plus delta log files.
 
 The Iceberg connector already solved the same class of problem. There, the Java coordinator handles all catalog and metadata work and sends pre-resolved file lists to the worker, while Velox implements the data-plane readers (positional deletes, equality deletes, deletion vectors) in C++ without an external Iceberg SDK. This proposal applies that architecture to Hudi MOR.
 
-Correctness is defined by the existing JVM path: for the same table and instant, the native path must return the same rows that `HudiRecordCursors` returns today.
+Correctness is defined by the existing JVM path: for the same table and instant, a table that is declared native-compatible must return the same rows that `HudiRecordCursors` returns today.
+
+Hudi read semantics are broader than parsing the log-file container and comparing a precombine field. Hudi table versions, log-block versions and formats, record merge modes, payload classes, record-key generation, rollback blocks, partial updates, and schema evolution can all affect the snapshot result. Reproducing the entire Java behavior in C++ will take time. Native support therefore grows through an explicit compatibility matrix: the first version supports a deliberately narrow, tested subset, and later releases add semantics only after differential testing against the JVM reader. A table outside the supported matrix is rejected before native splits are scheduled; this RFC does not introduce JVM fallback from native execution.
 
 ### Goals
 
@@ -34,7 +38,9 @@ Correctness is defined by the existing JVM path: for the same table and instant,
 * Read-optimized MOR and plain COW reads through the same code path (an empty log-file list).
 * Partitioned and non-partitioned tables.
 * Log-only file slices with no base file. These occur routinely on MOR tables and are handled, not rejected.
-* The native path is gated by a configuration flag that defaults to off, with fallback to the existing JVM path.
+* The native path is gated by a configuration flag that defaults to off.
+* Native compatibility is checked on the coordinator before scheduling. Unsupported table configurations fail with an actionable `NOT_SUPPORTED` error.
+* Preserve the existing JVM behavior on JVM clusters.
 
 ### Non-goals
 
@@ -44,6 +50,7 @@ The following are out of scope for the first version. The design should not make
 * Writes, compaction, clustering.
 * Pushing filters or projections into the base-file reader or log-block reader. The first version reads all columns and lets Velox filter above the reader.
 * Using the Hudi metadata table for file listing or data skipping on the native side.
+* Full semantic coverage for every Hudi table version, log-block format, record merge mode, custom payload, and schema-evolution pattern in the first release. These are added incrementally through the compatibility matrix.
 
 ## Proposed Implementation
 
@@ -52,7 +59,8 @@ The work spans three layers, each independently testable:
 ```
 Coordinator (Java, presto-hudi)
   HudiSplitManager → HudiSplit { tableBasePath, partitionPath,
-                                 baseFile?, logFiles[], instantTime, partitionKeys, ... }
+                                 baseFile?, logFiles[], instantTime, partitionKeys,
+                                 nativeMergeInfo, ... }
         │  JSON over the native protocol (_type: "hudi")
         ▼
 presto-native-execution (C++, presto_cpp)
@@ -69,64 +77,114 @@ Velox (new: velox/connectors/hive/hudi/)
         output type (all buffers Velox-native)
 ```
 
+### Supported semantics and eligibility
+
+The coordinator is responsible for deciding whether a table can use the native path. Before split generation, it reads the Hudi table configuration and validates the declared table semantics against a versioned native compatibility matrix. The worker performs strict validation of block-level details that are visible only while reading log files. The matrix covers at least:
+
+* Hudi table version and timeline layout version.
+* Base-file and log-block formats and versions.
+* Record merge mode, merge strategy ID, payload class, and precombine field.
+* Record-key fields, key generator, and whether Hudi meta fields are populated.
+* Rollback, partial-update, CDC, and schema-evolution behavior.
+
+The coordinator converts the supported parts of this configuration into a typed `HudiNativeMergeInfo` carried by the layout or split. This avoids asking the C++ worker to infer table semantics from an arbitrary options map. An unsupported table configuration fails during planning with a message naming the property. An unsupported block type or version that can only be discovered while reading fails the query on the worker. There is no per-split or mid-query fallback to a JVM worker.
+
+The compatibility matrix is expected to expand over time. A semantic is added only after the native implementation has differential fixtures covering the corresponding JVM behavior. The connector documentation lists the supported matrix for each release.
+
 ### 1. Velox connector (`velox/connectors/hive/hudi/`)
 
 A standalone connector that follows the current Velox Iceberg connector for structure and diverges only in the reader body:
 
-* `HudiConnectorSplit` (extends `HiveConnectorSplit`) adds the table base path, partition path, an optional base file, the log file list, the commit instant, and a read-options map that also carries storage/filesystem configuration. It implements serde the way `HiveIcebergSplit` does.
+* `HudiConnectorSplit` (extends `HiveConnectorSplit`) adds the table base path, partition path, an optional base file, the log file list, the query instant, and the typed native merge information validated by the coordinator. It implements serde the way `HiveIcebergSplit` does. Filesystem credentials remain worker catalog configuration and are not serialized in the split.
 * `HudiConnector` / `HudiConnectorFactory` (name `"hudi"`), with `HudiConnector` extending `HiveConnector` and creating a `HudiDataSource`.
-* `HudiDataSource` (extends `HiveDataSource`) overrides split-reader creation to return a `HudiSplitReader`. Partition-key constants and remaining-filter evaluation reuse the `HiveDataSource` machinery unchanged.
+* `HudiDataSource` (extends `HiveDataSource`) overrides split-reader creation to return a `HudiSplitReader`. Partition-key constants reuse the Hive machinery. Data-column filters are deliberately withheld from the base and log readers; the existing Velox `Filter` operator above the table scan evaluates them after the merged row vector is produced.
 * `HudiSplitReader` holds the Hudi-specific logic. On split preparation it opens the base Parquet file (if present) through Velox's DWIO reader, parses each log file, and builds a record-key index of the log records (inserts, updates, deletes). On `next()` it reads a batch of base rows, replaces or drops rows that the log index overrides, emits log-only inserts after the base scan drains, and drops any `_hoodie_*` meta column the query did not select. Base-only slices (read-optimized MOR and COW) run the same path with an empty log list.
 
 Two new pieces of C++ code sit behind a CMake option (`VELOX_ENABLE_HUDI`, default OFF):
 
-* `HoodieLogFormatReader` (roughly 500-800 lines) parses the Hudi log-file binary format: magic bytes, block headers, and the typed blocks. It reads DATA_BLOCK payloads through Velox's Avro reader (facebookincubator/velox#15790), collects record keys from DELETE_BLOCKs, and applies COMMAND_BLOCK rollbacks. The reference implementation is `HoodieLogFormatReader` in hudi-common (Java).
-* `HudiRecordMerger` (roughly 300-500 lines) takes a base-file batch and the record-key index and produces the merged output. Updates replace base rows after precombine resolution, deletes drop them, and log-only inserts are emitted after the base scan. This mirrors what `HoodieRealtimeRecordReader` does in Java.
+* `HoodieLogFormatReader` parses the Hudi log-file binary format: magic bytes, block headers, and the typed blocks included in the current compatibility matrix. It reads DATA_BLOCK payloads through Velox's Avro reader, collects record keys from DELETE_BLOCKs, and applies COMMAND_BLOCK rollbacks. The reference implementation is `HoodieLogFormatReader` in hudi-common (Java).
+* `HudiRecordMerger` takes a base-file batch, the record-key index, and `HudiNativeMergeInfo`, then produces the merged output according to the supported record merge mode. Updates replace or combine with base rows, deletes drop them, and log-only inserts are emitted after the base scan. This mirrors the supported behavior of `HoodieRealtimeRecordReader` and `HoodieRecordMerger` rather than assuming all tables use identical precombine semantics.
 
 Both components are synchronous C++ with no async runtime; reads block the driver thread the same way any other file I/O does. Because the merge is by record key rather than positional, no `Mutation` bitmap is involved.
 
 #### Memory
 
-All buffers (base rows, log records, the record-key index) are allocated through Velox's `MemoryPool`, so the memory arbitrator can see, throttle, and reclaim them like any other connector. The record-key index is held in memory during the merge. Its size is bounded by the number of log records in the slice, which the coordinator controls through split sizing. If very large slices become a problem, a streaming merge that processes log blocks incrementally is a possible follow-up.
+All buffers (base rows, decoded log records, and the record-key index) are allocated through the connector's Velox `MemoryPool`. This makes usage visible to query limits and memory arbitration, but does not by itself make the index reclaimable.
+
+Presto currently creates one Hudi split per file slice and includes all log files in that slice; split weight does not divide the slice. The first version therefore enforces a configurable upper bound on total log-file bytes per native split during coordinator eligibility checking. Slices above the bound are rejected before scheduling. The worker also checks the bound defensively while opening the split.
+
+The in-memory index is non-reclaimable in the first version. A later streaming or spillable merger can remove this restriction, but must provide an explicit `MemoryReclaimer`/spill contract and arbitration tests before the coordinator-side bound is relaxed.
 
 #### Error handling
 
-Parser and merge errors raise Velox errors carrying the split context (path, instant). A slice that uses a Hudi feature the native path does not handle yet raises a typed "unsupported" error so the coordinator can fall back to the JVM path for that query or table. A missing base file is expected and handled normally.
+Parser and merge errors raise Velox errors carrying the split context (path, instant, table version, and merge mode). Unsupported semantics should normally be caught by coordinator eligibility checking. If the worker nevertheless encounters an unsupported or malformed block, the query fails; it is not retried on a JVM worker. A missing base file is expected and handled normally.
 
 ### 2. presto-native-execution (protocol + converter)
 
-* A `presto_protocol` connector yml declares the `HudiSplit` protocol subclass with `key: hudi` (plus the types it references), wired into the protocol codegen the same way the Iceberg yml is.
-* `HudiPrestoToVeloxConnector` converts the deserialized JSON `HudiSplit` into a Velox `HudiConnectorSplit` (base file, log files, instant, table base path, partition keys, storage options). Column-handle and table-handle conversion delegate to the Hive base, exactly like `IcebergPrestoToVeloxConnector`.
-* Registration adds the `"hudi"` protocol converter and the Velox `HudiConnectorFactory`.
+The Hudi connector has its own Java handle classes; native support requires more than a split subclass. A `presto_protocol` connector yml explicitly declares:
+
+* `HudiColumnHandle` as a `ColumnHandle` subclass.
+* `HudiTableHandle` as a `ConnectorTableHandle` subclass.
+* `HudiTableLayoutHandle` as a `ConnectorTableLayoutHandle` subclass.
+* `HudiSplit` as a `ConnectorSplit` subclass.
+* Minimal value types used by these handles, including file descriptors, partition values, and `HudiNativeMergeInfo`.
+
+The native wire shape should be minimal. In particular, it should flatten the fields needed by the worker instead of serializing the full Java `HudiPartition` and Hive metastore `Storage` object graph.
+
+`HudiPrestoToVeloxConnector` explicitly implements:
+
+* Split conversion into `HudiConnectorSplit`.
+* `HudiColumnHandle` conversion into the corresponding Hive/Velox column handle.
+* `HudiTableLayoutHandle` conversion into a `HiveTableHandle`, including partition columns but no data-column `ScanSpec` filters. The planner's `FilterNode` remains responsible for the unenforced data predicate.
+
+Common Hive conversion helpers may be factored out and reused, but Hudi handles cannot be deserialized as Hive handles. This follows the actual Iceberg pattern: Iceberg has connector-specific protocol classes and explicit split, column-handle, and table-handle conversion.
+
+Registration adds the `"hudi"` protocol converter and `HudiConnectorFactory`. Native workers also require a matching Hudi catalog entry; coordinator and worker upgrade ordering is covered by the adoption plan.
 
 ### 3. Presto Java (`presto-hudi`)
 
 `HudiSplit` is JSON-annotated today but never actually travels to a native worker. The coordinator-side changes:
 
-* Ensure `HudiSplit`/`HudiFile` serialize everything the native converter needs: table base path, partition path, base file path and length, log file paths, instant time, partition keys, storage options.
-* Register the connector as native-compatible so the coordinator schedules Hudi splits to native workers, following what `presto-iceberg` and `presto-hive` do (handle resolver, connector serde, native protocol recognition).
-* Add a configuration flag `hudi.native-execution-enabled`, default off, that routes eligible queries to native workers and otherwise falls back to the JVM `HudiRecordCursors` path (also on unsupported slices).
+* Bind `ConnectorSystemConfig` in the Hudi connector so it can distinguish JVM and native deployments.
+* Add coordinator-side compatibility validation using the Hudi table configuration and known file-slice metadata.
+* Serialize a minimal native split containing table and partition paths, base and log file descriptors, query instant, partition values, and normalized `HudiNativeMergeInfo`.
+* Register the Hudi handles with the connector protocol and make the catalog available to native workers, following the Iceberg deployment pattern.
+* Add a configuration flag `hudi.native-execution-enabled`, default off. JVM clusters continue to use `HudiRecordCursors`. On native clusters, a Hudi scan is accepted only when the flag is enabled and the table passes compatibility validation; otherwise planning fails with `NOT_SUPPORTED`.
 
 ### Data flow (snapshot query)
 
-1. The coordinator plans the scan. `HudiSplitManager` lists the latest merged file slices at or before the query instant (existing `getLatestMergedFileSlicesBeforeOrOn` logic) and emits `HudiSplit`s carrying each base file and its logs.
-2. Splits serialize as `_type: "hudi"` JSON to the native workers.
-3. On the worker, the protocol layer deserializes the split, the converter builds a `HudiConnectorSplit`, and the Velox Hudi connector takes over.
-4. `HudiSplitReader` reads the base Parquet file, parses the log files, merges by record key, and rows flow up the Velox pipeline like any other scan.
+1. The coordinator loads the Hudi table configuration, validates it against the native compatibility matrix, and builds `HudiNativeMergeInfo`.
+2. `HudiSplitManager` lists the latest merged file slices at or before the query instant (existing `getLatestMergedFileSlicesBeforeOrOn` logic), applies the native log-size bound, and emits `HudiSplit`s carrying each base file and its logs.
+3. Splits serialize as `_type: "hudi"` JSON to the native workers.
+4. On the worker, the protocol layer deserializes the split, the converter builds a `HudiConnectorSplit`, and the Velox Hudi connector takes over.
+5. `HudiSplitReader` reads the base Parquet file, parses the log files, and merges by record key. Rows then flow to the existing Velox `Filter` operator and the rest of the pipeline.
 
 Schema and partition specifics:
 
 * The base file's Parquet schema and the log blocks' Avro schema are both read into Velox row types and projected onto the reader output type. The `_hoodie_*` meta columns appear only when the query selects them.
 * Partition columns arrive as constants from the split's partition keys, the Hive way; they are not read from files.
-* Filters and projections stay above the reader in the first version. Pushdown into the base reader and log blocks is a later optimization.
+* Projections into the base reader and log blocks are deferred in the first version. The reader may still add merge-required or filter-only columns that are not part of the final output.
+
+### Filter ordering
+
+Data-column filters must be evaluated after base and log records are merged. Applying a predicate to the base file first is incorrect because a log update can move a row into or out of the predicate.
+
+The existing JVM connector already preserves this ordering:
+
+* `HudiMetadata.getTableLayoutForConstraint` returns the full constraint as the `unenforcedConstraint`.
+* The planner therefore keeps a `FilterNode` above the `TableScanNode`.
+* `HudiPageSourceProvider` passes `TupleDomain.all()` to the COW Parquet reader, and the MOR path passes no predicate into `HoodieRealtimeInputFormat`.
+
+The native connector preserves the same contract. Partition predicates may still be used by the coordinator for partition pruning. The Hudi protocol converter does not turn data-column domains into Hive `ScanSpec` filters, so `HudiSplitReader` produces merged rows and the existing Velox `Filter` operator evaluates the planner's `FilterNode` above the scan. Dynamic filters on mutable data columns are ignored by the scan in the first version rather than pushed into the base reader. Predicate pushdown is future work and requires Hudi-aware reasoning that proves it is safe across base and log records.
 
 ### Risks / open items
 
-1. HoodieLogFormat fidelity. The log-file binary format is defined by Hudi's Java source (`HoodieLogFormat.java`, `HoodieLogBlock.java`) rather than a standalone spec. A spike that parses a known log file and diffs the result against the Java reader settles the format details (block types, magic-byte versions, corrupt and partial-block handling) before the full build.
-2. Avro reader readiness. The Velox Avro reader (facebookincubator/velox#15790) is still in review. If it does not land in time, the connector can start with Parquet-based log blocks (Hudi 1.x supports both) and add Avro log-block support when the reader merges.
-3. Coordinator-to-native routing. We need to confirm the exact registration that makes the scheduler send splits of a non-Hive connector to native workers; Iceberg is the reference.
-4. Filesystem and credential parity. The log reader uses Velox's filesystem API, so it inherits the same storage access (S3/HDFS/local) and auth as the Parquet reader. This needs verification for all storage backends.
-5. Schema evolution across log blocks. If the table schema changed between log blocks (column adds, renames, type widening), the merge must handle mismatched schemas. The Java reader relies on Avro schema resolution, and the Velox Avro reader needs to support the same.
+1. Semantic convergence. The Java Hudi reader remains the source of truth, but complete parity will take multiple releases. The compatibility matrix, coordinator validation, and differential suite prevent unsupported semantics from silently producing different results.
+2. HoodieLogFormat fidelity. The log-file binary format is defined by Hudi's Java source (`HoodieLogFormat.java`, `HoodieLogBlock.java`) rather than a standalone spec. Golden fixtures must cover each supported block and table version, including corrupt, partial, and rollback behavior.
+3. Avro reader readiness. The Velox Avro reader is tracked by facebookincubator/velox#18228. General MOR support cannot be declared until the required Avro schema-resolution and decoding capabilities land. A Parquet-log-only implementation may be developed earlier, but is documented and gated as a restricted compatibility subset.
+4. Filesystem and credential parity. The log reader uses Velox's filesystem API and worker catalog configuration, so it should inherit the same storage access (S3/HDFS/local) and auth as the Parquet reader. This needs verification for all supported storage backends without sending credentials in splits.
+5. Schema evolution across log blocks. If the table schema changed between log blocks (column adds, renames, type widening), the merge must handle mismatched schemas. A schema-evolution case remains unsupported until Velox reproduces the Java/Avro resolution behavior and the differential suite covers it.
+6. Memory bound. File slices can contain large log chains. The first release trades coverage for predictable memory by rejecting slices above the configured native limit; streaming or spillable merge is required before lifting that limit.
 
 ## [Optional] Other Approaches Considered
 
@@ -140,20 +198,70 @@ The coordinator reads log files with the Hudi Java library, performs the merge, 
 
 ### Pure C++ reader (chosen)
 
-The Velox Iceberg connector shows that implementing format readers in C++ is practical: its delete readers total roughly 700 lines with no external SDK, and memory management, error handling, and threading stay uniform with the rest of Velox. Hudi MOR needs roughly 1000-1500 more lines than Iceberg did (the log-format parser plus merge logic) on top of the Avro reader. In exchange there is no Rust dependency, no FFI boundary, and memory accounting is exact from the start.
+The Velox Iceberg connector shows that implementing table-format-specific readers in C++ can integrate cleanly with Velox memory management, error handling, and threading. A pure C++ Hudi reader avoids a Rust build dependency and FFI boundary and keeps connector-owned buffers inside Velox's memory accounting. The tradeoff is that Presto and Velox take responsibility for tracking Hudi log-format and merge-semantics changes.
+
+#### Maintenance policy for the pure C++ implementation
+
+The C++ implementation is a compatibility layer, not an independent redefinition of Hudi semantics. It follows these maintenance rules:
+
+* **Declared compatibility:** Each release documents the supported Hudi table versions, log-block versions and formats, record merge modes, payload classes, and schema-evolution cases.
+* **Default deny:** Unknown table versions, merge strategies, payload classes, block types, or block versions fail validation instead of being interpreted as the closest known behavior.
+* **Differential source of truth:** Golden fixtures are generated with released Hudi Java versions and read by both `HoodieRealtimeInputFormat` and the native reader. Native support is expanded only when these results match.
+* **Upgrade gate:** Upgrading the Hudi dependency used by `presto-hudi` requires running the native differential suite and reviewing changes to `HoodieLogFormat`, `HoodieLogBlock`, `HoodieRecordMerger`, payload handling, and schema resolution.
+* **Isolation:** Log parsing, merge policy, and Velox vector production remain separate components so format-version changes do not silently alter merge semantics.
+* **Ownership:** The Velox Hudi connector has named maintainers in the Velox component ownership metadata. The Presto Hudi maintainers own the Java/native compatibility matrix and upgrade tests.
+* **Upstream alignment:** Relevant semantic or format changes are tracked through Apache Hudi and Velox issues. Where practical, fixtures and compatibility findings are contributed upstream.
+
+If this maintenance model proves too costly, the protocol and connector layers remain independent of the reader implementation and can adopt a future hudi-rs integration once its allocator and runtime integration satisfy Velox requirements.
 
 ## Adoption Plan
 
-* No impact on existing users by default. The native path sits behind `hudi.native-execution-enabled` (default off), and JVM clusters are unaffected entirely.
+* No impact on existing JVM users. JVM clusters continue to use `HudiRecordCursors`.
+* The native path sits behind `hudi.native-execution-enabled`, default off. On a native cluster, disabling the flag or using an unsupported table produces `NOT_SUPPORTED`; there is no JVM fallback.
 * No SQL grammar, client API, or SPI changes. New surface area is the configuration flag, the Velox CMake option, and the `hudi` native protocol type.
-* When the flag is on, unsupported slices and features fall back to the JVM path rather than failing the query, so the flag can be enabled incrementally per deployment.
-* Documentation: the Hudi connector page gains a native-execution section covering the flag and the initial limitations (no pushdown, no time-travel or incremental on native).
+* Upgrade order is native workers first, then coordinators. Workers without the Hudi connector/protocol must not receive Hudi tasks. During a rolling upgrade, the coordinator-side flag remains off until all native workers have the matching connector and catalog configuration.
+* The feature is enabled incrementally by catalog or deployment after representative tables pass compatibility validation and JVM/native differential tests.
+* Documentation: the Hudi connector page gains a native-execution section covering the flag, compatibility matrix, memory limit, filter ordering, and initial limitations.
 * Natural follow-ups, each independent of this RFC: filter and projection pushdown into the base reader, metadata-table-based file skipping on the native side, time-travel and incremental support, and a streaming merge for very large file slices.
 
 ## Test Plan
 
-* A spike comes first: a small Velox C++ test that reads a single known Hudi log file, parses the blocks, and verifies the extracted records match the Java reader's output. This settles the binary-format details before the full build.
-* Velox unit tests over small MOR tables (prebuilt fixtures): read a slice through `HudiSplitReader` and assert the merged output, including log-only slices and logs carrying updates and deletes.
-* End-to-end tests in presto-native-execution, following the Iceberg native test harness: snapshot `SELECT`s on an MOR table (for example the `stock_ticks_mor` style used by Hudi's docker demo) against a native worker.
-* A correctness oracle: diff native results against the JVM `HudiRecordCursors` path for the same tables and instants.
-* A memory test: confirm all buffers (base rows, log records, record-key index) are allocated through the `MemoryPool` and released properly.
+Testing is organized around the declared compatibility matrix. The Java Hudi reader is the correctness oracle.
+
+### Protocol and eligibility tests
+
+* Java JSON and C++ protocol round trips for `HudiColumnHandle`, `HudiTableHandle`, `HudiTableLayoutHandle`, `HudiSplit`, and `HudiNativeMergeInfo`.
+* Coordinator validation tests for every supported and rejected table property, merge mode, payload class, key configuration, declared log format, and schema-evolution category.
+* Verify unsupported tables fail before split scheduling and produce an actionable error.
+* Verify unsupported block types and versions discovered by the worker fail the query with split and block context.
+* Mixed-version deployment tests: new coordinator with an old worker, old coordinator with a new worker, missing worker catalog, and the CMake feature disabled.
+
+### Log parser and merge unit tests
+
+* Golden log fixtures generated by each supported Hudi Java version. Cover data, delete, command/rollback, corrupt, partial, and log-only blocks where applicable to the compatibility matrix.
+* Base plus log merges covering inserts, updates, deletes, repeated updates to the same key, duplicate keys across blocks, multiple delta commits, and log-only file slices.
+* Record merge modes and payload behaviors are tested separately. Custom or unsupported mergers must be rejected rather than approximated.
+* Record-key cases: single and composite keys, null handling, populated and non-populated Hudi meta fields, and partitioned/non-partitioned tables.
+* Schema cases: column add, default value, rename, removal, type promotion, and incompatible changes. Each case is either differential-tested as supported or validation-tested as rejected.
+
+### Filter-ordering tests
+
+* Verify a base row that does not match a predicate but is updated by a log record to match is returned.
+* Verify a base row that matches a predicate but is updated not to match is removed.
+* Cover deletes, log-only inserts, filter-only columns, partition predicates, and dynamic filters on mutable data columns.
+* Assert that data-column predicates are absent from the base-file and log-reader `ScanSpec` and are evaluated against the merged output.
+
+### Differential and end-to-end tests
+
+* Run the same snapshot query at the same instant through native workers and JVM `HudiRecordCursors`, then compare unordered results.
+* Generate randomized commit sequences containing inserts, updates, deletes, rollbacks, compaction boundaries, and supported schema changes, and compare the native and JVM results after each instant.
+* End-to-end tests in `presto-native-execution`, following the Iceberg native test harness, for partitioned, non-partitioned, COW, MOR, and log-only tables.
+* Verify filesystem and credential behavior for every storage backend supported by the native deployment.
+
+### Memory and performance tests
+
+* Confirm all connector-owned buffers are allocated from the connector `MemoryPool` and released after the split.
+* Verify coordinator and worker enforcement at, below, and above the native log-byte limit.
+* Run under memory arbitration and confirm that an oversized or memory-exhausted split fails cleanly without untracked RSS growth.
+* Record peak index memory, base/log bytes read, rows inserted/updated/deleted, CPU time, and wall time.
+* Compare native and JVM execution on representative MOR tables. Performance results are reported per axis—latency, CPU, scanned bytes, and peak memory—rather than as a single multiplier.
