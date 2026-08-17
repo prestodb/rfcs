@@ -10,7 +10,7 @@ Proposers
 - [jja725/adbc-presto](https://github.com/jja725/adbc-presto) - Working prototype of the driver
 - [RFC-0022: Go Client Library v2](RFC-0022-go-client-v2.md) - The Presto Go client that this driver builds on
 - [RFC-0004: Arrow Flight Connector](RFC-0004-arrow-flight-connector.md) - Established the canonical Arrow-to-Presto type mapping in `presto-common-arrow`
-- [prestodb/rfcs#64](https://github.com/prestodb/rfcs/pull/64) - RFC for a native ADBC connector in C++ workers (complementary server-side work)
+- [prestodb/rfcs#64](https://github.com/prestodb/rfcs/pull/64) - RFC-0026, a native ADBC connector in C++ workers (complementary server-side work)
 - [adbc-drivers/trino](https://github.com/adbc-drivers/trino) - The Trino ADBC driver whose architecture this driver follows
 
 ## Summary
@@ -77,11 +77,13 @@ The driver accepts three URI forms:
 - Explicit scheme: `http://host:8080` or `https://host:443`
 - Bare: `host:port` (defaults to HTTP)
 
-Standard options (user, catalog, schema, TLS settings) are recognized as URI query parameters or ADBC options. Unrecognized URI query parameters are forwarded to Presto as session properties, so users can set any session property without driver changes:
+User and password come from the URI userinfo or the standard ADBC options; catalog and schema come from the URI path. The recognized query parameters are the TLS settings handled by the driver (`ssl_ca`, `ssl_cert`, `ssl_key`, `ssl_skip_verify`) and the parameters the Go client v2 defines in its DSN format (`timezone`, `client_tags`, `client_info`, `source`). Any other query parameter is forwarded to Presto as a session property — a convention inherited from the Go client v2 DSN — so users can set any session property without driver changes:
 
 ```
 presto://analyst@coordinator:8080/hive/default?query_max_run_time=10m
 ```
+
+Catalog session properties use their dotted form (`?hive.max_split_size=...`). This passthrough means a mistyped recognized-parameter name is sent to the server as a session property; the failure mode is loud rather than silent, because Presto validates session property names at query submission and rejects unknown ones with `INVALID_SESSION_PROPERTY` on the first query. A dedicated `session.` prefix was considered instead, but rejected to stay consistent with the Go client v2 DSN convention that the driver documents and delegates to.
 
 ### TLS and authentication
 
@@ -89,32 +91,50 @@ TLS configuration is delegated to the Go client v2: custom CA certificates, clie
 
 ### Type mapping
 
-Presto already defines a canonical Arrow correspondence in `presto-common-arrow` (`ArrowBlockBuilder.getPrestoTypeFromArrowField`), introduced with the Arrow Flight connector (RFC-0004). The driver targets that mapping:
+Presto already defines an Arrow correspondence in `presto-common-arrow` (`ArrowBlockBuilder.getPrestoTypeFromArrowField`), introduced with the Arrow Flight connector (RFC-0004). That mapping runs in the Arrow-to-Presto direction (it is how the Flight connector reads Arrow data into Presto), so the driver defines the Presto-to-Arrow direction to be consistent with its inverse, and extends it where the inverse is not unique or a type is absent from it (for example, `CHAR` does not appear in the Flight mapping at all; the driver maps it to `Utf8` alongside `VARCHAR`).
 
-| Presto type | Arrow type (canonical, per `presto-common-arrow`) |
-|---|---|
-| `BOOLEAN` | `Bool` |
-| `TINYINT` / `SMALLINT` / `INTEGER` / `BIGINT` | `Int8` / `Int16` / `Int32` / `Int64` |
-| `REAL` / `DOUBLE` | `Float32` / `Float64` |
-| `DECIMAL(p,s)` | `Decimal128(p,s)` |
-| `VARCHAR` / `CHAR` | `Utf8` |
-| `VARBINARY` | `Binary` |
-| `DATE` | `Date32` |
-| `TIME` | `Time` |
-| `TIMESTAMP` | `Timestamp(ms)` |
-| `ARRAY(T)` | `List` |
-| `MAP(K,V)` | `Map` |
-| `ROW(...)` | `Struct` |
+The full result mapping for the initial driver follows. Because Presto's REST protocol returns results as JSON and the Go client surfaces certain types as strings (see the type table in RFC-0022), a few types are carried as text rather than their natural Arrow representation:
 
-The initial driver deviates from the canonical mapping in three places, because Presto's REST protocol returns results as JSON and the Go client surfaces certain types as strings (see the type table in RFC-0022):
-
-| Presto type | Initial driver mapping | Reason |
+| Presto type | Arrow type (initial driver) | Notes |
 |---|---|---|
-| `DECIMAL(p,s)` | `Utf8` (decimal string) | REST returns decimals as JSON strings; lossless as text |
-| `ARRAY` / `MAP` / `ROW` | `Utf8` (JSON) | REST returns nested values as JSON; Go client exposes them as strings |
-| `TIMESTAMP` / `TIME` | millisecond precision | Presto's REST responses carry millisecond precision |
+| `BOOLEAN` | `Bool` | |
+| `TINYINT` / `SMALLINT` / `INTEGER` / `BIGINT` | `Int8` / `Int16` / `Int32` / `Int64` | |
+| `REAL` / `DOUBLE` | `Float32` / `Float64` | |
+| `DECIMAL(p,s)` | `Utf8` (decimal string) | REST returns decimals as JSON strings, and the client exposes no precision/scale metadata; lossless as text |
+| `VARCHAR` / `CHAR` | `Utf8` | |
+| `VARBINARY` | `Binary` | |
+| `DATE` | `Date32` | |
+| `TIME` / `TIME WITH TIME ZONE` | `Time32(ms)` | Presto times have fixed millisecond precision |
+| `TIMESTAMP` | `Timestamp(ms)`, timezone-naive | Presto timestamps have fixed millisecond precision (no parameterized precision as in Trino) |
+| `TIMESTAMP WITH TIME ZONE` | `Timestamp(ms, "UTC")` | |
+| `INTERVAL YEAR TO MONTH` | `MonthDayNanoInterval` | days and nanoseconds are zero |
+| `INTERVAL DAY TO SECOND` | `MonthDayNanoInterval` | months is zero |
+| `IPADDRESS` | `Utf8` | Arrow has no IP address type |
+| `UUID` | Arrow UUID extension type (`FixedSizeBinary(16)`) | |
+| `ARRAY` / `MAP` / `ROW` | `Utf8` (JSON text) | see below |
+| `UNKNOWN` (untyped `NULL` literal) | `Null` | |
+| Any other type (`JSON`, `HyperLogLog`, `TDIGEST`, `GEOMETRY`, ...) | `Utf8` | fallback: the value's textual representation from the REST protocol |
 
-These are transport limitations, not design choices. Aligning fully with the canonical mapping — native `Decimal128` and native Arrow nested types — is planned follow-up work in the driver (parsing the JSON representations into typed Arrow builders), and would become free if Presto later serves columnar results (see Adoption Plan, out of scope).
+Two properties hold across the whole table. Every column is marked nullable, because the Go client exposes no nullability metadata. And every Arrow field carries the original Presto type name in its field metadata, so consumers can recover the source type even where several Presto types share an Arrow representation.
+
+For the types carried as text: the string is exactly the REST protocol's JSON rendering of the value, and consumers that need structure must parse it. A SQL `NULL` at the column level is always an Arrow null (validity bitmap), never the string `"null"`; JSON `null` appears only inside a nested value's text (for example, `[1,null,3]` for an array with a null element), so the two are never ambiguous. These are transport limitations, not design choices. Aligning fully with native Arrow types — `Decimal128` and native nested types — is planned follow-up work in the driver (parsing the JSON representations into typed Arrow builders), and would become free if Presto later serves columnar results (see Adoption Plan, out of scope). Because `DECIMAL`-as-text is the most disruptive of these for ADBC consumers that expect numeric columns, an opt-in driver option to decode `DECIMAL` results into `Decimal128` (parsing the decimal strings) is planned ahead of the nested-type work.
+
+### ADBC API coverage
+
+ADBC specifies more surface than query execution. The initial driver covers it as follows; "unsupported" entries return the standard ADBC `NOT_IMPLEMENTED` status:
+
+| ADBC feature | Initial driver | Notes |
+|---|---|---|
+| Query execution (`ExecuteQuery` / `ExecuteUpdate`) | Supported | |
+| Parameter binding (`Bind` / `BindStream`) | Supported (positional) | The Go client interpolates parameters client-side into SQL literals; types whose literal form is ambiguous are wrapped in explicit `CAST`s |
+| `Prepare` | Supported (client-side) | No server round trip; Presto's server-side prepared statements (`X-Presto-Prepared-Statement`) are not used initially |
+| Transactions (autocommit off, `Commit` / `Rollback`) | Supported | Maps to the Go client's `START TRANSACTION` support, including isolation levels; actual transactional semantics depend on what the target connector supports |
+| Metadata (`GetObjects`, `GetTableSchema`, `GetTableTypes`, `GetInfo`) | Supported | |
+| Statistics (`GetStatistics`) | Supported | Backed by `SHOW STATS` (see below) |
+| Bulk ingestion (create / append / replace / create-append modes) | Supported | Batched `INSERT` statements sized under Presto's default 1 MB query-length limit (`query.max-length`) |
+| Query cancellation | Supported | Cancelling the statement's context stops the client's polling loop, and the client cancels the server-side query via the protocol's `DELETE` on the query's `nextUri` |
+| `ExecutePartitions` | Unsupported | The REST protocol has no partitioned result sets; results stream from the coordinator |
+| Substrait plan execution | Unsupported | SQL only, reported via `GetInfo` |
 
 ### PrestoDB-specific behaviors
 
