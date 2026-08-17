@@ -10,7 +10,7 @@ Proposers
 - [jja725/adbc-presto](https://github.com/jja725/adbc-presto) - Working prototype of the driver
 - [RFC-0022: Go Client Library v2](RFC-0022-go-client-v2.md) - The Presto Go client that this driver builds on
 - [RFC-0004: Arrow Flight Connector](RFC-0004-arrow-flight-connector.md) - Established the canonical Arrow-to-Presto type mapping in `presto-common-arrow`
-- [prestodb/rfcs#64](https://github.com/prestodb/rfcs/pull/64) - RFC-0026, a native ADBC connector in C++ workers (complementary server-side work)
+- [prestodb/rfcs#64](https://github.com/prestodb/rfcs/pull/64) - RFC for a native ADBC connector in C++ workers (complementary server-side work)
 - [adbc-drivers/trino](https://github.com/adbc-drivers/trino) - The Trino ADBC driver whose architecture this driver follows
 
 ## Summary
