@@ -16,7 +16,7 @@ Proposers
 
 ## Summary
 
-Enable Presto C++ (Prestissimo) workers to run snapshot `SELECT` queries against Hudi MERGE_ON_READ (MOR) tables. Today `presto-hudi` supports MOR only on JVM workers, so native clusters cannot read MOR tables at all. This RFC proposes a native Hudi connector in Velox, built around a C++ HoodieLogFormat reader and a record-key merger in the same style as the Velox Iceberg connector. It also covers the presto-native-execution protocol and converter glue, and the coordinator changes needed to schedule Hudi splits to native workers.
+Enable Presto C++ (Prestissimo) workers to run `SELECT` queries against Hudi MERGE_ON_READ (MOR) tables, with the query type — snapshot (default), read-optimized, or incremental — chosen per query through catalog session properties, the way Spark's `hoodie.datasource.query.type` works. Today `presto-hudi` supports MOR only on JVM workers and only as snapshot reads, so native clusters cannot read MOR tables at all, and no Presto or Trino connector offers incremental queries. This RFC proposes a native Hudi connector in Velox, built around a C++ HoodieLogFormat reader and a record-key merger in the same style as the Velox Iceberg connector. It also covers the presto-native-execution protocol and converter glue, and the coordinator changes needed to schedule Hudi splits to native workers.
 
 ## Background
 
@@ -25,6 +25,8 @@ Hudi MERGE_ON_READ tables store data as base Parquet files plus delta log files.
 * The Java connector (`presto-hudi`) supports both COPY_ON_WRITE and MERGE_ON_READ via `HudiRecordCursors` on top of `HoodieRealtimeInputFormat`. The merge runs inside the JVM worker using the Hudi Java library.
 * Presto C++ workers have no Hudi support. Organizations running native clusters either keep a JVM cluster around for Hudi workloads, or restrict themselves to read-optimized queries that silently miss un-compacted updates.
 * Velox has no Hudi connector. The Hudi community tracks interest in one in apache/hudi#18308.
+
+Query-type selection is just as lopsided across engines. Spark is the only engine where the Hudi query type is a per-read choice (`hoodie.datasource.query.type` = `snapshot` | `read_optimized` | `incremental`). In Presto and Trino, the read-optimized-versus-realtime decision is baked into table registration — which input format the table, or its `_ro`/`_rt` views, were synced with — and incremental queries are not supported at all, through either the Hive connector or the Hudi connector, in either engine. This RFC brings the per-query model to Presto native execution: one registered MOR table, with the query type chosen at query time.
 
 The Iceberg connector already solved the same class of problem. There, the Java coordinator handles all catalog and metadata work and sends pre-resolved file lists to the worker, while Velox implements the data-plane readers (positional deletes, equality deletes, deletion vectors) in C++ without an external Iceberg SDK. This proposal applies that architecture to Hudi MOR.
 
@@ -35,6 +37,8 @@ Hudi read semantics are broader than parsing the log-file container and comparin
 ### Goals
 
 * MOR snapshot reads on native workers: base file plus log files, merged by record key as of the query instant.
+* Query-level query-type selection: `snapshot` (default), `read_optimized`, and `incremental`, chosen per query via catalog session properties. No separate `_ro`/`_rt` table registration is needed.
+* Incremental reads on native workers: the full merged state, as of the end instant, of every record whose latest change falls inside a requested instant range.
 * Read-optimized MOR and plain COW reads through the same code path (an empty log-file list).
 * Partitioned and non-partitioned tables.
 * Log-only file slices with no base file. These occur routinely on MOR tables and are handled, not rejected.
@@ -46,7 +50,8 @@ Hudi read semantics are broader than parsing the log-file container and comparin
 
 The following are out of scope for the first version. The design should not make any of them harder later:
 
-* Time-travel and incremental queries.
+* Time-travel (point-in-time snapshot at an arbitrary historical instant) queries. The instant-range machinery introduced for incremental reads is the natural base for this later.
+* CDC-format incremental output — before/after change images (Spark's `hoodie.datasource.query.incremental.format=cdc`). Incremental queries here return latest merged records, not change images.
 * Writes, compaction, clustering.
 * Pushing filters or projections into the base-file reader or log-block reader. The first version reads all columns and lets Velox filter above the reader.
 * Using the Hudi metadata table for file listing or data skipping on the native side.
@@ -59,8 +64,8 @@ The work spans three layers, each independently testable:
 ```
 Coordinator (Java, presto-hudi)
   HudiSplitManager → HudiSplit { tableBasePath, partitionPath,
-                                 baseFile?, logFiles[], instantTime, partitionKeys,
-                                 nativeMergeInfo, ... }
+                                 baseFile?, logFiles[], instantTime, queryType,
+                                 incrementalInstants?, partitionKeys, nativeMergeInfo, ... }
         │  JSON over the native protocol (_type: "hudi")
         ▼
 presto-native-execution (C++, presto_cpp)
@@ -91,14 +96,45 @@ The coordinator converts the supported parts of this configuration into a typed 
 
 The compatibility matrix is expected to expand over time. A semantic is added only after the native implementation has differential fixtures covering the corresponding JVM behavior. The connector documentation lists the supported matrix for each release.
 
+### Query types and query-level selection
+
+The query type is a per-query choice made through catalog session properties, not a property of how the table was registered:
+
+| Session property | Values | Default | Meaning |
+| ---------------- | ------ | ------- | ------- |
+| `hudi.query_type` | `snapshot`, `read_optimized`, `incremental` | `snapshot` | Which view of the table the query reads. |
+| `hudi.incremental_begin_instant` | Hudi instant time | none | Lower bound of the instant range (resolved by completion time on Hudi 1.x timelines). Required when `query_type` is `incremental`. |
+| `hudi.incremental_end_instant` | Hudi instant time | latest completed instant | Upper bound of the instant range. |
+
+Semantics:
+
+* **snapshot** — the merged state of the table as of the query instant. The default, and the behavior described throughout this RFC.
+* **read_optimized** — the latest base files at or before the query instant; log files are excluded from the splits. Same result a `_ro`-synced table gives today, without the second table registration. Runs the standard split path with an empty log list.
+* **incremental** — the rows whose latest change was made by a commit in the requested range. The coordinator resolves the range to an explicit set of instants (on Hudi 1.x timelines, `IncrementalQueryAnalyzer` resolves the begin and end bounds by completion time; boundary open/closed and hollow-commit semantics are pinned per Hudi version in the compatibility matrix), reads the modified partitions from those commits' metadata, builds a file-system view over the affected files, and emits splits for the latest merged file slice of each touched file group as of the last included instant. The worker merges each slice fully, then keeps only rows whose `_hoodie_commit_time` is a member of the resolved instant set — membership, not a range comparison, because records carry commit request times while 1.x ranges resolve by completion time, and the two orders can differ. A record updated several times inside the range appears once, with its end-of-range state; a record deleted inside the range is absent from the output. This is the shape of Spark's `MergeOnReadIncrementalRelationV2`: its `incrementalSpanRecordFilters` is an `IN` filter over the included commits, and its file listing is `getLatestMergedFileSlicesBeforeOrOn` over the partitions those commits modified.
+
+Incremental output is deliberately **full merged records** — merge, then filter by commit membership — which is Spark's default incremental format (`hoodie.datasource.query.incremental.format=latest_state`) and matches what a COW incremental consumer sees today. It is not the partial record image (changed-columns-only) output that log-based MOR incremental readers can produce, which is a known breaking change for consumers migrating from COW to MOR.
+
+Incremental queries add validation on top of the compatibility matrix:
+
+* The table must populate Hudi meta fields; commit-time filtering requires `_hoodie_commit_time`. Tables written with `hoodie.populate.meta.fields=false` are rejected.
+* Every commit in the resolved range must still be reconstructable from the timeline. If cleaning or archiving has removed files or timeline entries the range needs, the query fails with an error naming the earliest servable instant, rather than silently returning an incomplete change set. An opt-in fallback to a full-table scan (Spark's `hoodie.datasource.read.incr.fallback.fulltablescan.enable`) is future work; the default is deny.
+* A missing or malformed begin instant, or a begin instant not earlier than the end instant, fails during planning.
+* The resolved instant set travels in the split, so the coordinator bounds its size the way it bounds log bytes per split; a range resolving to more instants than the bound is rejected with guidance to narrow it.
+
+The first two rules mirror the Spark reader's own `validate()`, which rejects a missing start instant and any table with meta fields disabled; a query admitted here satisfies the same preconditions Spark enforces.
+
+Session properties are the right first surface: they require no SQL grammar or client changes, they are per-query, and they are the established Presto mechanism for connector-scoped read options. SQL time-travel syntax (`FOR VERSION AS OF`) expresses a point, not a range; a table-valued function such as `table_changes(...)` is a natural long-term surface and can be layered over the same coordinator machinery later without changing the protocol or the reader.
+
+One asymmetry is worth stating plainly: snapshot reads have the JVM `HudiRecordCursors` path as their correctness oracle, but no Presto or Trino incremental behavior exists on any worker type, so the oracle for incremental queries is Hudi's Spark reader (`hoodie.datasource.query.type=incremental`). The coordinator-side range listing is engine-neutral, so a JVM incremental path can be added later, but it is not part of this RFC.
+
 ### 1. Velox connector (`velox/connectors/hive/hudi/`)
 
 A standalone connector that follows the current Velox Iceberg connector for structure and diverges only in the reader body:
 
-* `HudiConnectorSplit` (extends `HiveConnectorSplit`) adds the table base path, partition path, an optional base file, the log file list, the query instant, and the typed native merge information validated by the coordinator. It implements serde the way `HiveIcebergSplit` does. Filesystem credentials remain worker catalog configuration and are not serialized in the split.
+* `HudiConnectorSplit` (extends `HiveConnectorSplit`) adds the table base path, partition path, an optional base file, the log file list, the query instant, the query type with its optional resolved incremental instant set, and the typed native merge information validated by the coordinator. It implements serde the way `HiveIcebergSplit` does. Filesystem credentials remain worker catalog configuration and are not serialized in the split.
 * `HudiConnector` / `HudiConnectorFactory` (name `"hudi"`), with `HudiConnector` extending `HiveConnector` and creating a `HudiDataSource`.
 * `HudiDataSource` (extends `HiveDataSource`) overrides split-reader creation to return a `HudiSplitReader`. Partition-key constants reuse the Hive machinery. Data-column filters are deliberately withheld from the base and log readers; the existing Velox `Filter` operator above the table scan evaluates them after the merged row vector is produced.
-* `HudiSplitReader` holds the Hudi-specific logic. On split preparation it opens the base Parquet file (if present) through Velox's DWIO reader, parses each log file, and builds a record-key index of the log records (inserts, updates, deletes). On `next()` it reads a batch of base rows, replaces or drops rows that the log index overrides, emits log-only inserts after the base scan drains, and drops any `_hoodie_*` meta column the query did not select. Base-only slices (read-optimized MOR and COW) run the same path with an empty log list.
+* `HudiSplitReader` holds the Hudi-specific logic. On split preparation it opens the base Parquet file (if present) through Velox's DWIO reader, parses each log file, and builds a record-key index of the log records (inserts, updates, deletes). On `next()` it reads a batch of base rows, replaces or drops rows that the log index overrides, emits log-only inserts after the base scan drains, and drops any `_hoodie_*` meta column the query did not select. Base-only slices (read-optimized MOR and COW) run the same path with an empty log list. For incremental splits the reader merges as usual, then drops every output row whose `_hoodie_commit_time` is not in the split's resolved instant set. That filter belongs to the reader, not the planner's `FilterNode`: it is part of the query type's definition, and it cannot be applied to merge inputs because a log record can move a row into or out of the commit set.
 
 Two new pieces of C++ code sit behind a CMake option (`VELOX_ENABLE_HUDI`, default OFF):
 
@@ -127,7 +163,7 @@ The Hudi connector has its own Java handle classes; native support requires more
 * `HudiTableHandle` as a `ConnectorTableHandle` subclass.
 * `HudiTableLayoutHandle` as a `ConnectorTableLayoutHandle` subclass.
 * `HudiSplit` as a `ConnectorSplit` subclass.
-* Minimal value types used by these handles, including file descriptors, partition values, and `HudiNativeMergeInfo`.
+* Minimal value types used by these handles, including file descriptors, partition values, the query type, the resolved incremental instant set, and `HudiNativeMergeInfo`.
 
 The native wire shape should be minimal. In particular, it should flatten the fields needed by the worker instead of serializing the full Java `HudiPartition` and Hive metastore `Storage` object graph.
 
@@ -149,15 +185,19 @@ Registration adds the `"hudi"` protocol converter and `HudiConnectorFactory`. Na
 * Add coordinator-side compatibility validation using the Hudi table configuration and known file-slice metadata.
 * Serialize a minimal native split containing table and partition paths, base and log file descriptors, query instant, partition values, and normalized `HudiNativeMergeInfo`.
 * Register the Hudi handles with the connector protocol and make the catalog available to native workers, following the Iceberg deployment pattern.
+* Register the query-type session properties (`hudi.query_type`, `hudi.incremental_begin_instant`, `hudi.incremental_end_instant`) in `HudiSessionProperties` and validate their combinations during planning.
+* For incremental queries, resolve the instant range to a commit set against the timeline (completion-time based on Hudi 1.x), read the modified partitions from commit metadata, and emit splits only for the affected file groups. When the range is no longer reconstructable because of cleaning or archiving, fail with the earliest servable instant named.
 * Add a configuration flag `hudi.native-execution-enabled`, default off. JVM clusters continue to use `HudiRecordCursors`. On native clusters, a Hudi scan is accepted only when the flag is enabled and the table passes compatibility validation; otherwise planning fails with `NOT_SUPPORTED`.
 
-### Data flow (snapshot query)
+### Data flow
 
 1. The coordinator loads the Hudi table configuration, validates it against the native compatibility matrix, and builds `HudiNativeMergeInfo`.
 2. `HudiSplitManager` lists the latest merged file slices at or before the query instant (existing `getLatestMergedFileSlicesBeforeOrOn` logic), applies the native log-size bound, and emits `HudiSplit`s carrying each base file and its logs.
 3. Splits serialize as `_type: "hudi"` JSON to the native workers.
 4. On the worker, the protocol layer deserializes the split, the converter builds a `HudiConnectorSplit`, and the Velox Hudi connector takes over.
 5. `HudiSplitReader` reads the base Parquet file, parses the log files, and merges by record key. Rows then flow to the existing Velox `Filter` operator and the rest of the pipeline.
+
+The numbered steps describe a snapshot query. A read-optimized query changes step 2 to list the latest base files only and emit splits with empty log lists. An incremental query adds instant-set resolution and validation to step 1, restricts step 2 to the file groups touched by commits in the set, and adds the commit-membership filter to step 5 before rows leave the reader.
 
 Schema and partition specifics:
 
@@ -177,6 +217,8 @@ The existing JVM connector already preserves this ordering:
 
 The native connector preserves the same contract. Partition predicates may still be used by the coordinator for partition pruning. The Hudi protocol converter does not turn data-column domains into Hive `ScanSpec` filters, so `HudiSplitReader` produces merged rows and the existing Velox `Filter` operator evaluates the planner's `FilterNode` above the scan. Dynamic filters on mutable data columns are ignored by the scan in the first version rather than pushed into the base reader. Predicate pushdown is future work and requires Hudi-aware reasoning that proves it is safe across base and log records.
 
+The incremental commit-membership filter is not a user predicate and never reaches the `FilterNode`; it is applied inside `HudiSplitReader` after the merge, for the same reason data predicates stay above the scan: a log record can move a row into or out of the requested commit set, so filtering merge inputs by commit time would be incorrect. Spark draws the same line — its span filter is pushed only into the reader used for base-only file slices, while slices with logs are merged first and filtered after. The native reader may adopt the same base-only-slice pushdown later; the first version filters merged output only.
+
 ### Risks / open items
 
 1. Semantic convergence. The Java Hudi reader remains the source of truth, but complete parity will take multiple releases. The compatibility matrix, coordinator validation, and differential suite prevent unsupported semantics from silently producing different results.
@@ -185,6 +227,8 @@ The native connector preserves the same contract. Partition predicates may still
 4. Filesystem and credential parity. The log reader uses Velox's filesystem API and worker catalog configuration, so it should inherit the same storage access (S3/HDFS/local) and auth as the Parquet reader. This needs verification for all supported storage backends without sending credentials in splits.
 5. Schema evolution across log blocks. If the table schema changed between log blocks (column adds, renames, type widening), the merge must handle mismatched schemas. A schema-evolution case remains unsupported until Velox reproduces the Java/Avro resolution behavior and the differential suite covers it.
 6. Memory bound. File slices can contain large log chains. The first release trades coverage for predictable memory by rejecting slices above the configured native limit; streaming or spillable merge is required before lifting that limit.
+7. Incremental oracle and semantic drift. No Presto or Trino incremental behavior exists to compare against, so the differential suite for incremental queries runs against Hudi's Spark reader. Hudi's own MOR incremental semantics have shifted across releases — 0.x resolves ranges by commit request time where 1.x resolves by completion time, hollow-commit handling is policy-driven, clustering skip is disabled upstream over a duplication bug (HUDI-9672), and log-based readers can emit partial record images — while this RFC pins `latest_state` full-merged-record semantics and per-version boundary behavior in the compatibility matrix; the test plan asserts them explicitly rather than assuming engines agree.
+8. Retention windows. Incremental correctness depends on the requested range still being reconstructable despite cleaning and archiving. Default-deny validation converts that risk into an explicit failure, but operators must configure retention to cover their consumers' poll intervals.
 
 ## [Optional] Other Approaches Considered
 
@@ -218,11 +262,11 @@ If this maintenance model proves too costly, the protocol and connector layers r
 
 * No impact on existing JVM users. JVM clusters continue to use `HudiRecordCursors`.
 * The native path sits behind `hudi.native-execution-enabled`, default off. On a native cluster, disabling the flag or using an unsupported table produces `NOT_SUPPORTED`; there is no JVM fallback.
-* No SQL grammar, client API, or SPI changes. New surface area is the configuration flag, the Velox CMake option, and the `hudi` native protocol type.
+* No SQL grammar, client API, or SPI changes. New surface area is the configuration flag, the query-type session properties, the Velox CMake option, and the `hudi` native protocol type.
 * Upgrade order is native workers first, then coordinators. Workers without the Hudi connector/protocol must not receive Hudi tasks. During a rolling upgrade, the coordinator-side flag remains off until all native workers have the matching connector and catalog configuration.
 * The feature is enabled incrementally by catalog or deployment after representative tables pass compatibility validation and JVM/native differential tests.
 * Documentation: the Hudi connector page gains a native-execution section covering the flag, compatibility matrix, memory limit, filter ordering, and initial limitations.
-* Natural follow-ups, each independent of this RFC: filter and projection pushdown into the base reader, metadata-table-based file skipping on the native side, time-travel and incremental support, and a streaming merge for very large file slices.
+* Natural follow-ups, each independent of this RFC: filter and projection pushdown into the base reader, metadata-table-based file skipping on the native side, time-travel support on top of the incremental instant-range machinery, an opt-in full-scan fallback for expired incremental ranges, a `table_changes(...)` table-valued surface, CDC-format output, a JVM-worker incremental path, and a streaming merge for very large file slices.
 
 ## Test Plan
 
@@ -250,6 +294,16 @@ Testing is organized around the declared compatibility matrix. The Java Hudi rea
 * Verify a base row that matches a predicate but is updated not to match is removed.
 * Cover deletes, log-only inserts, filter-only columns, partition predicates, and dynamic filters on mutable data columns.
 * Assert that data-column predicates are absent from the base-file and log-reader `ScanSpec` and are evaluated against the merged output.
+
+### Query-type and incremental tests
+
+* Session-property validation: incremental without a begin instant, begin at or after end, malformed instant times, incremental against a table without populated meta fields, and every query type against tables that fail compatibility validation.
+* Read-optimized parity: query-level `read_optimized` returns the same rows as listing the latest base files directly, and as an equivalent `_ro`-registered table.
+* Incremental correctness on COW and MOR: inserts, updates, and deletes inside and outside the range; a record updated multiple times in range appearing once with its end-of-range state; a record deleted in range absent from the output; ranges spanning compaction and clustering boundaries; log-only file slices inside the range.
+* Timeline-shape cases: commits completing out of order (hollow commits); compaction and clustering instants inside the range — records rewritten by table services keep their original commit times and must not be re-emitted; and boundary instants exercising the pinned open/closed semantics.
+* Full-record assertion: every incremental output row is a complete record, equal to the same key's row in a snapshot query at the end instant — never a partial image.
+* Retention: ranges intersecting cleaned or archived commits fail with the earliest servable instant named; ranges just inside the retention window succeed.
+* Differential: the same incremental range through the native path and through Hudi's Spark incremental reader on the same table, compared unordered, across the supported compatibility matrix.
 
 ### Differential and end-to-end tests
 
