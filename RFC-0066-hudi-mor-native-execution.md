@@ -16,7 +16,7 @@ Proposers
 
 ## Summary
 
-Enable Presto C++ (Prestissimo) workers to run `SELECT` queries against Hudi MERGE_ON_READ (MOR) tables, with the query type — snapshot (default) or read-optimized — chosen per query through a catalog session property, the way Spark's `hoodie.datasource.query.type` works. Today `presto-hudi` supports MOR only on JVM workers, so native clusters cannot read MOR tables at all. This RFC proposes a native Hudi connector in Velox, built around a C++ HoodieLogFormat reader and a record-key merger in the same style as the Velox Iceberg connector. It also covers the presto-native-execution protocol and converter glue, and the coordinator changes needed to schedule Hudi splits to native workers.
+Enable Presto C++ (Prestissimo) workers to run `SELECT` queries against Hudi MERGE_ON_READ (MOR) tables, with the query type — snapshot (default) or read-optimized — chosen per query through a catalog session property, the way Spark's `hoodie.datasource.query.type` works. Today `presto-hudi` supports MOR only on JVM workers, so native clusters cannot read MOR tables at all. This RFC proposes a native Hudi connector in Velox, built around a C++ HoodieLogFormat reader and a record-key merger in the same style as the Velox Iceberg connector. It also covers the presto-native-execution protocol and converter glue, and the coordinator changes needed to schedule Hudi splits to native workers. For deployments that read Hudi tables through the Hive connector, an opt-in, Trino-compatible redirect (`hive.hudi-catalog-name`) forwards Hudi-format tables to the Hudi catalog at planning time, so existing `hive.*` SQL reaches the same native path without extending the Hive connector's own Hudi integration.
 
 ## Background
 
@@ -26,7 +26,7 @@ Hudi MERGE_ON_READ tables store data as base Parquet files plus delta log files.
 * Presto C++ workers have no Hudi support. Organizations running native clusters either keep a JVM cluster around for Hudi workloads, or restrict themselves to read-optimized queries that silently miss un-compacted updates.
 * Velox has no Hudi connector. The Hudi community tracks interest in one in apache/hudi#18308.
 
-Query-type selection is just as lopsided across engines. Spark is the only engine where the Hudi query type is a per-read choice (`hoodie.datasource.query.type` = `snapshot` | `read_optimized` | `incremental`). In Presto and Trino, the read-optimized-versus-snapshot decision is baked into table registration — which input format the table, or its `_ro`/`_rt` views, were synced with. This RFC brings the per-query model to Presto native execution for the two table views: one registered MOR table, read as snapshot or read-optimized at query time. Incremental (change-pulling) reads remain Spark-only across SQL engines and stay out of scope here.
+Query-type selection is just as lopsided across engines. Spark is the only engine where the Hudi query type is a per-read choice (`hoodie.datasource.query.type` = `snapshot` | `read_optimized` | `incremental`). In Presto and Trino, the read-optimized-versus-snapshot decision is baked into table registration — which input format the table, or its `_ro`/`_rt` views, were synced with. This RFC brings the per-query model to Presto native execution for the two table views: one registered MOR table, read as snapshot or read-optimized at query time. Incremental (change-pulling) reads remain Spark-only across SQL engines and stay out of scope here. Trino has meanwhile removed Hudi reads from its Hive connector altogether: since Trino 411, `hive.hudi-catalog-name` redirects Hudi-format tables to the Hudi catalog. This RFC adopts the same redirection model for Presto's Hive connector.
 
 The Iceberg connector already solved the same class of problem. There, the Java coordinator handles all catalog and metadata work and sends pre-resolved file lists to the worker, while Velox implements the data-plane readers (positional deletes, equality deletes, deletion vectors) in C++ without an external Iceberg SDK. This proposal applies that architecture to Hudi MOR.
 
@@ -38,6 +38,7 @@ Hudi read semantics are broader than parsing the log-file container and comparin
 
 * MOR snapshot reads on native workers: base file plus log files, merged by record key as of the query instant.
 * Query-level query-type selection: `snapshot` (default) or `read_optimized`, chosen per query via a catalog session property, with a catalog-config default a deployment can change. No separate `_ro`/`_rt` table registration is needed.
+* A path for existing Hive-catalog consumers: an opt-in redirect (`hive.hudi-catalog-name`) forwards Hudi-format tables from the Hive connector to the Hudi catalog at planning time, with no SQL changes.
 * Read-optimized MOR and plain COW reads through the same code path (an empty log-file list).
 * Partitioned and non-partitioned tables.
 * Log-only file slices with no base file. These occur routinely on MOR tables and are handled, not rejected.
@@ -50,6 +51,7 @@ Hudi read semantics are broader than parsing the log-file container and comparin
 The following are out of scope for the first version. The design should not make any of them harder later:
 
 * Time-travel and incremental (change-pulling) queries, including CDC-format change images (Spark's `hoodie.datasource.query.type=incremental` and `incremental.format=cdc`). No SQL engine offers these for Hudi today — they are Spark-only — and the split and reader machinery here is their natural base, but they are follow-up RFC material.
+* Extending the Hive connector's own Hudi integration to MOR snapshot. Native workers reject Hive splits that carry Hudi delta-log paths rather than reading the base file and silently dropping updates; Hive-catalog consumers get snapshot semantics through the redirect instead.
 * Writes, compaction, clustering.
 * Pushing filters or projections into the base-file reader or log-block reader. The first version reads all columns and lets Velox filter above the reader.
 * Using the Hudi metadata table for file listing or data skipping on the native side.
@@ -57,7 +59,7 @@ The following are out of scope for the first version. The design should not make
 
 ## Proposed Implementation
 
-The work spans three layers, each independently testable:
+The work spans three layers, each independently testable, plus a coordinator-only Hive-connector redirect that connects the existing Hive catalog surface to them:
 
 ```
 Coordinator (Java, presto-hudi)
@@ -177,6 +179,17 @@ Registration adds the `"hudi"` protocol converter and `HudiConnectorFactory`. Na
 * Register the `hudi.query_type` session property in `HudiSessionProperties`, defaulted from the `hudi.default-query-type` catalog config, and apply it during file-slice listing: snapshot lists the latest merged file slices, read-optimized lists the latest base files and emits splits with empty log lists.
 * Add a configuration flag `hudi.native-execution-enabled`, default off. JVM clusters continue to use `HudiRecordCursors`. On native clusters, a Hudi scan is accepted only when the flag is enabled and the table passes compatibility validation; otherwise planning fails with `NOT_SUPPORTED`.
 
+### 4. Hive connector redirection (`hive.hudi-catalog-name`)
+
+Most existing deployments read Hudi tables through the Hive connector's input-format integration, under `hive.*` table names. Extending that path to native MOR snapshot would duplicate this RFC's coordinator work against an untyped split — the Hive protocol carries Hudi log files only as `customSplitInfo` strings — with no planning-time hook to validate the compatibility matrix, and would double the differential test surface for identical semantics. Trino resolved the same tension by removing Hudi reads from its Hive connector and redirecting them to the Hudi catalog. This RFC adopts that model:
+
+* A new Hive connector configuration `hive.hudi-catalog-name`, unset by default. Unset means today's behavior: COW and read-optimized reads work as before, and a native worker that receives a Hive split carrying Hudi delta-log paths fails with an actionable error rather than reading the base file and silently dropping updates.
+* When set, planning redirects any Hive table whose storage format is a recognized Hudi input format to the same schema and table name in the named Hudi catalog. SQL text is untouched: `hive.schema.table` keeps working, served by the Hudi connector.
+* Redirection happens before split generation, so redirected queries get the full Hudi connector surface: compatibility validation, `hudi.query_type`, and the catalog default. A deployment that sets `hudi.default-query-type=read_optimized` on the target catalog preserves the cost and freshness profile its Hive-connector consumers already had, making the redirect behavior-neutral on day one with snapshot an explicit per-query opt-in.
+* Presto has no table redirection today. This adds one narrow, additive SPI hook — a default method on `ConnectorMetadata`, modeled on Trino's `redirectTable`, returning an optional target catalog, schema, and table — plus the resolution step in the engine metadata layer. Nothing in the hook is Hudi-specific; Iceberg and Delta redirects can reuse it.
+* Access control, masking, and `information_schema` visibility for a redirected table are evaluated against the target catalog.
+* The redirect is coordinator-only and independently deliverable: neither the Velox connector nor the native protocol depends on it, and JVM clusters benefit equally.
+
 ### Data flow
 
 1. The coordinator loads the Hudi table configuration, validates it against the native compatibility matrix, and builds `HudiNativeMergeInfo`.
@@ -214,6 +227,7 @@ The native connector preserves the same contract. Partition predicates may still
 4. Filesystem and credential parity. The log reader uses Velox's filesystem API and worker catalog configuration, so it should inherit the same storage access (S3/HDFS/local) and auth as the Parquet reader. This needs verification for all supported storage backends without sending credentials in splits.
 5. Schema evolution across log blocks. If the table schema changed between log blocks (column adds, renames, type widening), the merge must handle mismatched schemas. A schema-evolution case remains unsupported until Velox reproduces the Java/Avro resolution behavior and the differential suite covers it.
 6. Memory bound. File slices can contain large log chains. The first release trades coverage for predictable memory by rejecting slices above the configured native limit; streaming or spillable merge is required before lifting that limit.
+7. Redirection surface. Cross-catalog redirection moves where access control, masking, and metadata listings are evaluated — to the target Hudi catalog. Deployments with catalog-scoped policies must mirror them on the Hudi catalog before enabling the redirect; it ships unset, and reverting is a configuration change, which keeps the cutover controlled.
 
 ## [Optional] Other Approaches Considered
 
@@ -247,11 +261,12 @@ If this maintenance model proves too costly, the protocol and connector layers r
 
 * No impact on existing JVM users. JVM clusters continue to use `HudiRecordCursors`.
 * The native path sits behind `hudi.native-execution-enabled`, default off. On a native cluster, disabling the flag or using an unsupported table produces `NOT_SUPPORTED`; there is no JVM fallback.
-* No SQL grammar, client API, or SPI changes. New surface area is the configuration flag, the query-type session property with its catalog-config default, the Velox CMake option, and the `hudi` native protocol type.
+* No SQL grammar or client API changes. One additive SPI default method enables table redirection; existing connectors are unaffected. New surface area is the configuration flag, the query-type session property with its catalog-config default, the `hive.hudi-catalog-name` redirect, the Velox CMake option, and the `hudi` native protocol type.
 * Upgrade order is native workers first, then coordinators. Workers without the Hudi connector/protocol must not receive Hudi tasks. During a rolling upgrade, the coordinator-side flag remains off until all native workers have the matching connector and catalog configuration.
+* The redirect ships unset. Enabling order: configure the Hudi catalog on coordinators and workers, mirror access-control and masking policies onto it, validate representative tables through the Hudi catalog directly, then set `hive.hudi-catalog-name`. Unsetting it restores the legacy Hive path; no data or metastore changes are involved either way.
 * The feature is enabled incrementally by catalog or deployment after representative tables pass compatibility validation and JVM/native differential tests.
 * Documentation: the Hudi connector page gains a native-execution section covering the flag, compatibility matrix, memory limit, filter ordering, and initial limitations.
-* Natural follow-ups, each independent of this RFC: filter and projection pushdown into the base reader, metadata-table-based file skipping on the native side, time-travel and incremental (change-pulling) queries with CDC-format output — Spark's reader defines their semantics, and the query-type surface here extends to a third value for them — and a streaming merge for very large file slices.
+* Natural follow-ups, each independent of this RFC: filter and projection pushdown into the base reader, metadata-table-based file skipping on the native side, time-travel and incremental (change-pulling) queries with CDC-format output — Spark's reader defines their semantics, and the query-type surface here extends to a third value for them — a streaming merge for very large file slices, and reuse of the redirection SPI hook for Iceberg and Delta tables registered in Hive catalogs.
 
 ## Test Plan
 
@@ -286,6 +301,14 @@ Testing is organized around the declared compatibility matrix. The Java Hudi rea
 * Read-optimized parity: query-level `read_optimized` returns the same rows as an equivalent `_ro`-registered table read through the JVM path, and as listing the latest base files directly.
 * Read-optimized semantics: uncompacted log updates and deletes are absent, log-only file slices are excluded, and results equal snapshot once compaction has caught up.
 * COW equivalence: `snapshot` and `read_optimized` return identical results on COW tables.
+
+### Redirection tests
+
+* With `hive.hudi-catalog-name` unset, legacy behavior is unchanged: COW and read-optimized reads through the Hive connector, and native rejection of Hive splits carrying delta-log paths.
+* With it set, `hive.schema.table` over Hudi-format tables returns results identical to querying the Hudi catalog directly — both query types, JVM and native clusters.
+* Non-Hudi tables are never redirected. A missing or non-Hudi target catalog fails planning with a clear error.
+* Access control resolves against the target catalog, exercised for both granted and denied cases, including column-level policies.
+* `hudi.query_type` and `hudi.default-query-type` apply to redirected queries.
 
 ### Differential and end-to-end tests
 
