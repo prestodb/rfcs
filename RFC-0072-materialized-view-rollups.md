@@ -219,7 +219,17 @@ The contract:
 
 A partition transform describes a function `f` that maps a source partition value `s` to an MV partition value `t = f(s)`. Version 1 requires `f` to be monotonically non-decreasing: if `s1 <= s2`, then `f(s1) <= f(s2)`. So the source values that map to one target value always form a single contiguous interval. That is what lets the engine turn a predicate on the MV partition column into an exact predicate on the source column.
 
-For example, assume that a plugin registers a provider for `date_trunc` on `DATE`. An MV `sales_monthly` is partitioned by `sale_month`, defined as `date_trunc('month', sale_date)`:
+For example, assume that a plugin registers a provider for `date_trunc` on `DATE`, and this MV:
+
+```sql
+CREATE MATERIALIZED VIEW sales_monthly
+WITH (partitioned_by = ARRAY['sale_month'])
+AS SELECT customer_region, SUM(amount) AS revenue, date_trunc('month', sale_date) AS sale_month
+FROM sales
+GROUP BY customer_region, date_trunc('month', sale_date);
+```
+
+Each `sale_month` partition covers one month of `sale_date` partitions:
 
 ```
 sale_date    2026-01-01 … 2026-01-31 | 2026-02-01 … 2026-02-28 | 2026-03-01 …
@@ -234,11 +244,25 @@ sale_month          2026-01-01       |        2026-02-01       |  2026-03-01
 |---|---|---|
 | `provider.analyze(function, arguments)` | `CREATE MATERIALIZED VIEW`, for each output column that directly calls a registered function | Accept the call and return a transform, or decline by returning empty or throwing `IllegalArgumentException`. Declining fails the `CREATE`. |
 | `getProperties()` | `CREATE` and `REFRESH` | At `CREATE`, the engine checks that exactly one argument is the source column and every other argument is a constant. At `REFRESH`, it reads the cardinality. |
-| `encode()` | `CREATE` | Returns the configuration stored in `columnMappingInfo`, for example `{"transform": "date_trunc", "unit": "month"}`. |
+| `encode()` | `CREATE` | Returns the configuration stored in `columnMappingInfo`. |
 | `provider.decode(properties)` | `REFRESH ... WHERE` | Rebuilds the same transform from the stored map. |
 | `isCanonicalTargetValue(v)` | `REFRESH`, `MANY_TO_ONE` only | Reports whether `f` can produce `v`. |
 | `getSourceRange(v)` | `REFRESH`, `MANY_TO_ONE` only | Returns `[lower, upper)`: the source values `s` with `f(s) = v`. |
 | `apply(v)` | `REFRESH`, only when building the error message | Computes the canonical value the error suggests. |
+
+**The month transform, end to end.** The provider creates the transform at `CREATE` and rebuilds it at `REFRESH`. The transform answers questions about single values.
+
+| Step | Call | Result |
+|---|---|---|
+| `CREATE` | `provider.analyze(date_trunc, [constant('month'), sourceColumn(DATE)])` | The month transform |
+| | `getProperties()` | Source argument 1, constant arguments {0}, `MANY_TO_ONE`, format version 1 |
+| | `encode()` | `{"transform": "date_trunc", "unit": "month"}`, stored with the `sale_month` column mapping |
+| `REFRESH ... WHERE sale_month = DATE '2026-02-01'` | `provider.decode(stored map)` | The same month transform |
+| | `getProperties()` | `MANY_TO_ONE`, so the predicate is expanded |
+| | `isCanonicalTargetValue(DATE '2026-02-01')` | `true` |
+| | `getSourceRange(DATE '2026-02-01')` | `[DATE '2026-02-01', DATE '2026-03-01')`, which becomes `sale_date >= DATE '2026-02-01' AND sale_date < DATE '2026-03-01'` |
+| `REFRESH ... WHERE sale_month = DATE '2026-02-15'` | `isCanonicalTargetValue(DATE '2026-02-15')` | `false` |
+| | `apply(DATE '2026-02-15')` | `DATE '2026-02-01'`, which the error suggests |
 
 **Why the rewrite is exact.** Take a canonical value `v` with source range `[lo, hi)`:
 
@@ -259,6 +283,8 @@ A non-canonical value such as `DATE '2026-02-15'` is never produced by the month
 | `date_trunc('day', sale_date)` | `DATE` | `IDENTITY`: truncating a `DATE` to a day changes nothing | Not used; predicates are copied |
 | `year(sale_date)`, which returns `BIGINT` | `DATE` | `MANY_TO_ONE` | `[DATE 't-01-01', DATE '(t+1)-01-01')` |
 | A plugin function that rounds an integer down to a multiple of 10 | `BIGINT` | `MANY_TO_ONE` | `[t, t + 10)` |
+
+`IDENTITY` is still useful. A refresh predicate on a column computed by a function normally stays on top of the view query. An `IDENTITY` transform lets the engine copy it to the source column instead.
 
 **Functions that cannot be version 1 transforms**
 
@@ -436,7 +462,7 @@ The analyzer decodes each stored transform through the registry. Unknown or malf
 
   Before this change, an `OR` always stayed on the view.
 
-**Worked example.** Assume a plugin provider for `date_trunc` on `DATE`, and an MV `sales_monthly` partitioned by `sale_month`, defined as `date_trunc('month', sale_date)`. Each `REFRESH ... WHERE` predicate on `sale_month` is rewritten onto `sale_date`:
+**Worked example.** Assume a plugin provider for `date_trunc` on `DATE`, and an MV `sales_monthly` partitioned by `sale_month`, defined as `date_trunc('month', sale_date)`. Each `REFRESH ... WHERE` predicate on `sale_month` becomes a predicate on `sale_date` that filters `sales` directly instead of the view output, so the connector can prune `sale_date` partitions:
 
 | `REFRESH ... WHERE` | Source predicate |
 |---|---|
@@ -543,7 +569,6 @@ Before the feature is enabled by default:
 * Tests for each additional connector that opts in.
 
 ## Open Questions
-
 
 
 ## Appendix: Reference Implementation
