@@ -215,6 +215,66 @@ The contract:
 * Version 1 transforms are deterministic, preserve nulls, and are monotonically non-decreasing. A transform either keeps the source value (`IDENTITY`) or folds a contiguous range of source values into one target value (`MANY_TO_ONE`).
 * `encode()` returns everything needed to rebuild the transform, including the `transform` key. `decode()` returns a transform with the same ID.
 
+#### How a partition transform works
+
+A partition transform describes a function `f` that maps a source partition value `s` to an MV partition value `t = f(s)`. Version 1 requires `f` to be monotonically non-decreasing: if `s1 <= s2`, then `f(s1) <= f(s2)`. So the source values that map to one target value always form a single contiguous interval. That is what lets the engine turn a predicate on the MV partition column into an exact predicate on the source column.
+
+For example, assume that a plugin registers a provider for `date_trunc` on `DATE`. An MV `sales_monthly` is partitioned by `sale_month`, defined as `date_trunc('month', sale_date)`:
+
+```
+sale_date    2026-01-01 … 2026-01-31 | 2026-02-01 … 2026-02-28 | 2026-03-01 …
+sale_month          2026-01-01       |        2026-02-01       |  2026-03-01
+```
+
+`getSourceRange(DATE '2026-02-01')` returns `[DATE '2026-02-01', DATE '2026-03-01')`. The range is half-open, so adjacent ranges never overlap, and the provider never needs to know the last day of a month.
+
+**When the engine calls each method**
+
+| Method | Called during | Purpose |
+|---|---|---|
+| `provider.analyze(function, arguments)` | `CREATE MATERIALIZED VIEW`, for each output column that directly calls a registered function | Accept the call and return a transform, or decline by returning empty or throwing `IllegalArgumentException`. Declining fails the `CREATE`. |
+| `getProperties()` | `CREATE` and `REFRESH` | At `CREATE`, the engine checks that exactly one argument is the source column and every other argument is a constant. At `REFRESH`, it reads the cardinality. |
+| `encode()` | `CREATE` | Returns the configuration stored in `columnMappingInfo`, for example `{"transform": "date_trunc", "unit": "month"}`. |
+| `provider.decode(properties)` | `REFRESH ... WHERE` | Rebuilds the same transform from the stored map. |
+| `isCanonicalTargetValue(v)` | `REFRESH`, `MANY_TO_ONE` only | Reports whether `f` can produce `v`. |
+| `getSourceRange(v)` | `REFRESH`, `MANY_TO_ONE` only | Returns `[lower, upper)`: the source values `s` with `f(s) = v`. |
+| `apply(v)` | `REFRESH`, only when building the error message | Computes the canonical value the error suggests. |
+
+**Why the rewrite is exact.** Take a canonical value `v` with source range `[lo, hi)`:
+
+* `f(s) = v` exactly when `lo <= s < hi`. That is the definition of the range.
+* `f(s) >= v` exactly when `s >= lo`. Because `f` never decreases, every value from `lo` onward maps to `v` or later.
+* `f(s) > v` exactly when `s >= hi`.
+* `f(s) < v` exactly when `s < lo`, and `f(s) <= v` exactly when `s < hi`.
+
+If `f` could decrease, a source value after `hi` could map back to `v` or below, and none of these rewrites would hold.
+
+A non-canonical value such as `DATE '2026-02-15'` is never produced by the month transform, so `sale_month = DATE '2026-02-15'` would match nothing. The engine rejects it and suggests `DATE '2026-02-01'`.
+
+**One function, several configurations.** `analyze` sees the constant arguments and the resolved signature, so one provider can return different transforms. The range bounds are source values, so they have the source type even when the target type differs.
+
+| Output column | Source type | Cardinality | Source range of target `t` |
+|---|---|---|---|
+| `date_trunc('month', sale_date)` | `DATE` | `MANY_TO_ONE` | `[t, t + 1 month)` |
+| `date_trunc('day', sale_date)` | `DATE` | `IDENTITY`: truncating a `DATE` to a day changes nothing | Not used; predicates are copied |
+| `year(sale_date)`, which returns `BIGINT` | `DATE` | `MANY_TO_ONE` | `[DATE 't-01-01', DATE '(t+1)-01-01')` |
+| A plugin function that rounds an integer down to a multiple of 10 | `BIGINT` | `MANY_TO_ONE` | `[t, t + 10)` |
+
+**Functions that cannot be version 1 transforms**
+
+| Function | Why |
+|---|---|
+| Hash bucketing, such as `bucket(16, id)` | It is not monotonic. The ids in one bucket are scattered, not one interval. |
+| `day_of_week(sale_date)` | It is not monotonic. Each weekday covers many separate intervals. |
+| `id % 10` | It is not monotonic, for the same reason. |
+| `concat(region, country)` | It reads two source columns. A transform reads exactly one. |
+| A function declared `CALLED ON NULL INPUT` | It may map `NULL` to a non-`NULL` value. |
+| A non-deterministic function | The same source value could land in different partitions. |
+
+The engine rejects the last three by itself. It cannot detect the first three, and more generally it cannot check monotonicity or ranges at all. Those are the provider's promise: a wrong range makes refresh read the wrong source partitions.
+
+The engine steps, with a worked `REFRESH` example, are in "Partition transforms at creation" and "Refresh predicates".
+
 #### Derivation metadata in `MaterializedViewDefinition`
 
 API outline:
@@ -351,6 +411,8 @@ These cases are rejected with `NOT_SUPPORTED`:
 * a provider that rejects the call;
 * a registered function that is not a deterministic scalar.
 
+**What registering a function means.** Once a provider registers a function name, it owns every direct use of that function in an MV's output columns. `CREATE MATERIALIZED VIEW` fails if the provider declines a call. An output column that wraps the function in another expression is also rejected. So providers should register functions that are meant to be partition transforms, not widely used general-purpose functions.
+
 #### Refresh predicates
 
 The analyzer decodes each stored transform through the registry. Unknown or malformed metadata fails analysis.
@@ -374,13 +436,19 @@ The analyzer decodes each stored transform through the registry. Unknown or malf
 
   Before this change, an `OR` always stayed on the view.
 
-For illustration, assume that a plugin registers a `MANY_TO_ONE` provider for `date_trunc('month', <date>)`. An MV is partitioned by `sale_month`, defined as `date_trunc('month', sale_date)`. This statement reads only `sale_date >= DATE '2026-01-01' AND sale_date < DATE '2026-02-01'`:
+**Worked example.** Assume a plugin provider for `date_trunc` on `DATE`, and an MV `sales_monthly` partitioned by `sale_month`, defined as `date_trunc('month', sale_date)`. Each `REFRESH ... WHERE` predicate on `sale_month` is rewritten onto `sale_date`:
 
-```sql
-REFRESH MATERIALIZED VIEW sales_monthly WHERE sale_month = DATE '2026-01-01';
-```
-
-`WHERE sale_month = DATE '2026-01-15'` is rejected as non-canonical.
+| `REFRESH ... WHERE` | Source predicate |
+|---|---|
+| `sale_month = DATE '2026-02-01'` | `sale_date >= DATE '2026-02-01' AND sale_date < DATE '2026-03-01'` |
+| `sale_month <> DATE '2026-02-01'` | `sale_date < DATE '2026-02-01' OR sale_date >= DATE '2026-03-01'` |
+| `sale_month >= DATE '2026-02-01'` | `sale_date >= DATE '2026-02-01'` |
+| `sale_month > DATE '2026-02-01'` | `sale_date >= DATE '2026-03-01'` |
+| `sale_month < DATE '2026-02-01'` | `sale_date < DATE '2026-02-01'` |
+| `sale_month <= DATE '2026-02-01'` | `sale_date < DATE '2026-03-01'` |
+| `sale_month IN (DATE '2026-01-01', DATE '2026-03-01')` | `(sale_date >= DATE '2026-01-01' AND sale_date < DATE '2026-02-01') OR (sale_date >= DATE '2026-03-01' AND sale_date < DATE '2026-04-01')` |
+| `sale_month = DATE '2026-02-15'` | Rejected as non-canonical. The error suggests `DATE '2026-02-01'`. |
+| `sale_month = NULL` | Copied as `sale_date = NULL`. |
 
 `REFRESH ... WHERE` is supported only when `legacy_materialized_views` is enabled, which is the default today. RFC-0016 plans to deprecate it. The RFC-0016 path already rejects `WHERE` and derives the refresh scope from connector staleness. This RFC extends `WHERE` because it is the default path today. The transform contract itself does not depend on `WHERE`. Open Question 1 asks whether the RFC-0016 path should reuse it.
 
@@ -475,6 +543,8 @@ Before the feature is enabled by default:
 * Tests for each additional connector that opts in.
 
 ## Open Questions
+
+
 
 ## Appendix: Reference Implementation
 
