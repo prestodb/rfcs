@@ -142,7 +142,7 @@ public interface Plugin
 
 The engine registers both when the plugin is installed. The rules are:
 
-* Registration fails on a duplicate source function, function name or transform ID.
+* Registration fails on a duplicate source function or partition-transform function name.
 * Plugins cannot override the built-in strategies.
 * A batch of strategies is registered atomically.
 * Names are case-insensitive.
@@ -164,35 +164,33 @@ public final class MaterializedViewAggregationMergeStrategy
 }
 ```
 
-A plugin can add strategies for aggregates that the engine does not cover. For example, a plugin that ships a partial/merge pair of functions for averages can register `new MaterializedViewAggregationMergeStrategy("avg_partial", Optional.of("avg_merge"), false)`.
+A plugin can add strategies for aggregates that the engine does not cover. For example, a plugin that ships a partial/merge pair of functions for means can register `new MaterializedViewAggregationMergeStrategy("partial_mean", Optional.of("merge_mean"), false)`.
 
 #### Partition transforms
 
 ```java
 public interface MaterializedViewPartitionTransformProvider
 {
-    Set<String> getTransformIds();
-
     Set<String> getFunctionNames();
 
-    Optional<MaterializedViewPartitionTransform> analyze(FunctionMetadata function, List<MaterializedViewPartitionTransformArgument> arguments);
+    MaterializedViewPartitionTransform analyze(FunctionMetadata function, List<MaterializedViewPartitionTransformArgument> arguments);
 
     MaterializedViewPartitionTransform decode(Map<String, String> properties);
 }
 
 public interface MaterializedViewPartitionTransform
 {
+    enum MappingCardinality
+    {
+        IDENTITY,
+        MANY_TO_ONE
+    }
+
     String TRANSFORM_PROPERTY = "transform";
 
-    String getTransformId();
-
-    MaterializedViewPartitionTransformProperties getProperties();
+    MappingCardinality getMappingCardinality();
 
     Map<String, String> encode();
-
-    boolean isCanonicalTargetValue(ConstantExpression value);
-
-    ConstantExpression apply(ConstantExpression sourceValue);
 
     MaterializedViewPartitionRange getSourceRange(ConstantExpression targetValue);
 }
@@ -201,19 +199,16 @@ public interface MaterializedViewPartitionTransform
 Value classes:
 
 * `MaterializedViewPartitionTransformArgument` is either the source column (with its type) or a constant.
-* `MaterializedViewPartitionTransformProperties` holds:
-  * the source argument index;
-  * the constant argument indexes;
-  * the mapping cardinality, `IDENTITY` or `MANY_TO_ONE`;
-  * a positive format version.
 * `MaterializedViewPartitionRange` has non-null lower and upper bounds of the same type. The lower bound is inclusive and the upper bound is exclusive.
 
 The contract:
 
-* Function names and transform IDs are unique across all installed providers.
+* Function names are unique across all installed providers. The same name is stored in the encoded `transform` property and is used to select the provider when metadata is decoded.
 * A transform function must be a deterministic scalar function. It is looked up in the Java built-in namespace and in the configured default function namespace (for example, a native function namespace).
+* The engine supplies exactly one direct source-column argument and constant configuration arguments. The provider validates the argument count, order, types and values. It returns a transform or throws `IllegalArgumentException`; providers are not tried in sequence for different overloads of the same name.
 * Version 1 transforms are deterministic, preserve nulls, and are monotonically non-decreasing. A transform either keeps the source value (`IDENTITY`) or folds a contiguous range of source values into one target value (`MANY_TO_ONE`).
-* `encode()` returns everything needed to rebuild the transform, including the `transform` key. `decode()` returns a transform with the same ID.
+* `encode()` returns everything needed to rebuild the transform, including the registered function name in the `transform` key. The registry validates that name before persistence. `decode()` returns a transform that re-encodes the same name.
+* `getSourceRange()` returns the exact half-open source interval for a canonical target value. It throws `IllegalArgumentException` for a value with the wrong type, a malformed value or a non-canonical value. A provider may include a canonical-value suggestion in that error.
 
 #### How a partition transform works
 
@@ -242,27 +237,22 @@ sale_month          2026-01-01       |        2026-02-01       |  2026-03-01
 
 | Method | Called during | Purpose |
 |---|---|---|
-| `provider.analyze(function, arguments)` | `CREATE MATERIALIZED VIEW`, for each output column that directly calls a registered function | Accept the call and return a transform, or decline by returning empty or throwing `IllegalArgumentException`. Declining fails the `CREATE`. |
-| `getProperties()` | `CREATE` and `REFRESH` | At `CREATE`, the engine checks that exactly one argument is the source column and every other argument is a constant. At `REFRESH`, it reads the cardinality. |
+| `provider.analyze(function, arguments)` | `CREATE MATERIALIZED VIEW`, for each output column that directly calls a registered function | Validate the function-specific argument contract and return a transform, or throw `IllegalArgumentException`. Rejection fails the `CREATE`. |
+| `getMappingCardinality()` | `REFRESH` | Report whether the target value is an identity mapping or represents a source range. |
 | `encode()` | `CREATE` | Returns the configuration stored in `columnMappingInfo`. |
 | `provider.decode(properties)` | `REFRESH ... WHERE` | Rebuilds the same transform from the stored map. |
-| `isCanonicalTargetValue(v)` | `REFRESH`, `MANY_TO_ONE` only | Reports whether `f` can produce `v`. |
-| `getSourceRange(v)` | `REFRESH`, `MANY_TO_ONE` only | Returns `[lower, upper)`: the source values `s` with `f(s) = v`. |
-| `apply(v)` | `REFRESH`, only when building the error message | Computes the canonical value the error suggests. |
+| `getSourceRange(v)` | `REFRESH`, `MANY_TO_ONE` only | Validate `v` and return `[lower, upper)`: the source values `s` with `f(s) = v`. Invalid or non-canonical values raise `IllegalArgumentException`. |
 
 **The month transform, end to end.** The provider creates the transform at `CREATE` and rebuilds it at `REFRESH`. The transform answers questions about single values.
 
 | Step | Call | Result |
 |---|---|---|
 | `CREATE` | `provider.analyze(date_trunc, [constant('month'), sourceColumn(DATE)])` | The month transform |
-| | `getProperties()` | Source argument 1, constant arguments {0}, `MANY_TO_ONE`, format version 1 |
 | | `encode()` | `{"transform": "date_trunc", "unit": "month"}`, stored with the `sale_month` column mapping |
 | `REFRESH ... WHERE sale_month = DATE '2026-02-01'` | `provider.decode(stored map)` | The same month transform |
-| | `getProperties()` | `MANY_TO_ONE`, so the predicate is expanded |
-| | `isCanonicalTargetValue(DATE '2026-02-01')` | `true` |
+| | `getMappingCardinality()` | `MANY_TO_ONE`, so the predicate is expanded |
 | | `getSourceRange(DATE '2026-02-01')` | `[DATE '2026-02-01', DATE '2026-03-01')`, which becomes `sale_date >= DATE '2026-02-01' AND sale_date < DATE '2026-03-01'` |
-| `REFRESH ... WHERE sale_month = DATE '2026-02-15'` | `isCanonicalTargetValue(DATE '2026-02-15')` | `false` |
-| | `apply(DATE '2026-02-15')` | `DATE '2026-02-01'`, which the error suggests |
+| `REFRESH ... WHERE sale_month = DATE '2026-02-15'` | `getSourceRange(DATE '2026-02-15')` | Throws `IllegalArgumentException`; the provider may suggest `DATE '2026-02-01'` in the message |
 
 **Why the rewrite is exact.** Take a canonical value `v` with source range `[lo, hi)`:
 
@@ -424,9 +414,10 @@ Two more examples:
 An output column is a partition transform when it is a direct call to a registered transform function. The source argument is a single direct source column, and the other arguments are literals. The analyzer then:
 
 1. builds the argument list;
-2. calls `provider.analyze`;
-3. checks the returned properties against the arguments;
-4. stores `transform.encode()` in the column's `columnMappingInfo`.
+2. verifies that it contains one direct source column and constant literal configuration;
+3. calls `provider.analyze`, which validates the function-specific argument contract;
+4. validates that `transform.encode()` contains a function name owned by the provider;
+5. stores the encoded map in the column's `columnMappingInfo`.
 
 These cases are rejected with `NOT_SUPPORTED`:
 
@@ -500,8 +491,9 @@ None.
 * **Only registered transforms reach provider code.** A provider applies only to the function names it registers. The function must also resolve in the Java built-in namespace or the configured default namespace, and it must be a deterministic scalar function.
 * **Plugin trust.** Transform providers are plugin code. They run on the coordinator with the same trust as any other installed plugin. Merge strategies are plain data.
 * **Stored metadata is validated before use.** Analysis fails on any of these:
-  * an unknown transform ID;
-  * a decoded transform whose ID does not match;
+  * an unknown transform name;
+  * an analyzed transform that encodes a name not owned by its provider;
+  * a decoded transform that does not re-encode the stored name;
   * metadata that the provider rejects;
   * missing provenance;
   * an unsupported provenance version.
@@ -548,7 +540,7 @@ None.
 Unit and integration tests in the implementation pull requests:
 
 * **`presto-spi`.**
-  * `TestMaterializedViewAggregationMergeStrategy`, `TestMaterializedViewPartitionRange` and `TestMaterializedViewPartitionTransformProperties`.
+  * `TestMaterializedViewAggregationMergeStrategy` and `TestMaterializedViewPartitionRange`.
   * `TestMaterializedViewDefinition`: JSON round trips and backward compatibility.
 * **`presto-main-base`.**
   * `TestMaterializedViewAggregationMergeRegistry`: built-ins, plugin strategies, duplicate rejection and atomic batches.
@@ -569,6 +561,7 @@ Before the feature is enabled by default:
 * Tests for each additional connector that opts in.
 
 ## Open Questions
+
 
 
 ## Appendix: Reference Implementation
