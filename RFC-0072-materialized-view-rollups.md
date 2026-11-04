@@ -15,7 +15,7 @@ Proposers
 * [prestodb/presto#26612](https://github.com/prestodb/presto/issues/26612): Materialized Views support in Presto.
 * Implementation, as a stack of pull requests:
   1. [prestodb/presto#28717](https://github.com/prestodb/presto/pull/28717): `feat(spi): Add materialized view rollup extension points`
-  2. [prestodb/presto#28718](https://github.com/prestodb/presto/pull/28718): `feat(spi): Add materialized view derivation metadata`
+  2. [prestodb/presto#28718](https://github.com/prestodb/presto/pull/28718): `feat(spi): Add materialized view column mapping metadata`
   3. [prestodb/presto#28719](https://github.com/prestodb/presto/pull/28719): `feat(analyzer): Support materialized views over materialized views`
   4. [prestodb/presto#28720](https://github.com/prestodb/presto/pull/28720): `feat(analyzer): Translate transformed MV refresh predicates`
   5. [prestodb/presto#28721](https://github.com/prestodb/presto/pull/28721): `fix(analyzer): Preserve system properties when analyzing views`
@@ -29,8 +29,8 @@ The proposal has five parts:
 1. **Plugin extension points** for two things:
    * aggregate merge strategies, which say which aggregate combines the partial results of another;
    * partition transforms, which say how an MV partition value maps to a range of source partition values.
-2. **Derivation metadata** in `MaterializedViewDefinition`: per-column provenance and provider-defined transform metadata. Both are versioned and backward compatible.
-3. **MVs over MVs.** `CREATE MATERIALIZED VIEW` can read other MVs when a session property is enabled and both catalogs advertise a new connector capability. Dependency and aggregate checks fail closed.
+2. **Column mapping metadata** in `MaterializedViewDefinition`: derived-column lineage and provider-defined partition-transform metadata. Existing definitions remain compatible when the new fields are absent.
+3. **MVs over MVs.** `CREATE MATERIALIZED VIEW` can read other MVs when a session property is enabled and both catalogs advertise a new connector capability. The analyzer derives source-column semantics from each source MV's defining SQL, recursively and once per `CREATE`, before applying dependency and aggregate checks.
 4. **Transform-aware refresh predicates.** A `REFRESH MATERIALIZED VIEW ... WHERE` predicate on a transformed partition column is rewritten into the exact source range.
 5. **A session fix.** Views and MVs analyzed as the caller now see the caller's system session properties.
 
@@ -85,7 +85,8 @@ The two queries return different results.
 * Allow MVs over MVs, opt-in per session and per connector.
 * At creation time, reject any rollup that cannot be proven correct, with an error that says what to change.
 * Keep implementation-specific functions out of the engine core. Plugins supply merge rules and partition transforms, and the engine has a small built-in set.
-* Persist derivation metadata in the MV definition so that later tiers and refreshes can be validated. The format is versioned and backward compatible.
+* Derive aggregate semantics from stored MV SQL when a new tier is created, without adding analyzer-specific state to connector metadata.
+* Persist partition-transform configuration in the existing column mapping so refresh predicates can be translated later.
 * Translate refresh predicates on transformed partition columns into exact source ranges.
 * Let view and MV expansion honor the caller's system properties, while keeping definer views owned by other users, row filters and column masks isolated from them.
 
@@ -114,7 +115,7 @@ The appendix maps each part to its classes and its pull request.
 * **Source MV and rollup tier.** A source MV is an MV that another MV reads. The rollup tier is the MV that reads it.
 * **Merge strategy.** For a source aggregate `f`, the aggregate `g` such that `g` over the partial results of `f` equals `f` over the rows. The built-in strategies are `count → sum`, `sum → sum`, `min → min` and `max → max`.
 * **Duplicate-insensitive.** An aggregate whose result does not change when input rows repeat. The built-in ones are `min`, `max`, `arbitrary` and `any_value`. `arbitrary` and `any_value` have no merge function.
-* **Column provenance.** How an MV output column was produced: its function, kind, type, and whether it used `DISTINCT`.
+* **Column derivation.** The analyzer's per-`CREATE` description of how an MV output column was produced: its function, transformation kind and whether it used `DISTINCT`.
 * **Partition transform.** A deterministic scalar function, registered by a plugin, that maps a source partition column to an MV partition column.
 * **Canonical target value.** A value the transform can produce, such as the first day of a month for a month transform.
 * **Source range.** The half-open interval `[lower, upper)` of source values that map to one canonical target value.
@@ -291,45 +292,32 @@ The engine rejects the last three by itself. It cannot detect the first three, a
 
 The engine steps, with a worked `REFRESH` example, are in "Partition transforms at creation" and "Refresh predicates".
 
-#### Derivation metadata in `MaterializedViewDefinition`
+#### Column derivation and transform metadata
 
-API outline:
+Aggregate derivation is analyzer state, not connector metadata. When a `CREATE MATERIALIZED VIEW` reads a source MV, Presto parses and analyzes that source MV's `originalSql` under its catalog, schema and security context. The analysis identifies, for each output column:
+
+* whether it is an identity, transformation or aggregation;
+* the resolved built-in aggregate name, when one is known; and
+* whether the aggregate used `DISTINCT`.
+
+This includes outputs such as `COUNT(*)` that have no source-column lineage. A custom function that happens to be named `sum` is not classified as the built-in `sum`, because classification uses its resolved function handle.
+
+Source definitions are derived recursively. Results are cached by fully qualified MV name for the duration of one outer `CREATE`, then discarded. Pass-through columns inherit their source derivation. A pass-through through a join or `UNNEST` loses a duplicate-sensitive aggregate's function identity, and an expression over an aggregated source is classified as an aggregation with no known merge function. Those results fail closed at the next tier.
+
+Partition transforms require durable configuration because refresh happens after creation. That configuration remains in the existing column mapping:
 
 ```java
-public Map<String, ColumnProvenance> getColumnProvenance();
-
-public static final class ColumnProvenance
-{
-    public static final int CURRENT_VERSION = 1;
-
-    public int getVersion();
-
-    public Optional<String> getFunctionName();
-
-    public TransformationSubtype getSubtype();
-
-    public Optional<String> getReturnType();
-
-    public boolean isDistinct();
-}
-
 public static final class TableColumn
 {
     public Map<String, String> getColumnMappingInfo();
 }
 ```
 
-* `columnProvenance` is keyed by output column name.
-  * It covers every named output column, including aggregates with no source-column lineage such as `COUNT(*)`.
-  * `functionName` is the lowercase function name. It is recorded only when the function resolves to a built-in function handle, so a custom function that happens to be named `sum` is not recorded as `sum`.
-  * `subtype` is one of `IDENTITY`, `TRANSFORMATION` or `AGGREGATION`.
-* `columnMappingInfo` holds the encoded transform of a partition transform column. It is empty for ordinary mappings.
-* Provenance stores a stable descriptor rather than a resolved `FunctionHandle`. Function handles are not guaranteed to stay compatible across releases, and a view definition outlives many releases.
-* Both maps are optional in JSON. Definitions written before this change deserialize with empty maps, and a missing `distinct` reads as `false`. An empty provenance map means "unknown", not "every column is an identity".
+`columnMappingInfo` contains the provider's encoded transform for a partition-transform column and is empty for ordinary mappings. Definitions written before the field existed deserialize it as an empty map.
 
 #### Connector capability and session property
 
-* `ConnectorCapabilities.SUPPORTS_MATERIALIZED_VIEW_ON_MATERIALIZED_VIEW` means the connector stores the metadata needed to validate rollups. The Hive connector advertises it. Iceberg and other connectors do not advertise it until they opt in.
+* `ConnectorCapabilities.SUPPORTS_MATERIALIZED_VIEW_ON_MATERIALIZED_VIEW` means the connector supports creating and maintaining an MV whose direct source is another MV. The Hive connector advertises it. Iceberg and other connectors do not advertise it until they opt in.
 * `materialized_view_on_materialized_view_enabled` is a boolean session property, default `false`. It allows `CREATE MATERIALIZED VIEW` to read MVs.
 
 ### Code flow
@@ -341,7 +329,8 @@ public static final class TableColumn
    * Both the target catalog and the source MV's catalog must advertise the capability.
    * The chain below the source is walked. Self-references, cycles, more than four MV levels and malformed base-table catalog metadata are rejected.
 2. When the statement executes, the query-shape and aggregate rules below are checked.
-3. Column mappings, provenance and transform metadata are extracted and passed to the connector with the definition. The Hive connector stores provenance and base-table catalogs.
+3. For each source MV, the analyzer derives output-column semantics from its defining SQL. Nested sources are resolved recursively and cached for this `CREATE`.
+4. Column mappings and transform metadata are extracted and passed to the connector with the definition. The Hive connector stores them with base-table catalogs.
 
 The new MV may sit at most four MV levels above a base table, counting itself. Each extra level compounds staleness, because freshness is only checked one level up. A cycle leaves no valid refresh order.
 
@@ -362,7 +351,7 @@ All the rules below fail closed: anything the analyzer cannot prove correct is r
    * It reads a non-aggregate column of the source MV. That column holds one value per source group, not per source row.
    * It reads only columns of other tables in a join. The join can repeat their rows.
 4. If it reads an aggregated column, all of these must hold:
-   * The column has provenance of the supported version, with a known function.
+   * The source definition analysis identifies the column as an aggregate with a known function.
    * The aggregate is the registered merge function for that source function.
    * The source aggregate did not use `DISTINCT`, unless the source function is duplicate-insensitive.
    * The aggregate has no `FILTER` clause.
@@ -372,9 +361,9 @@ All the rules below fail closed: anything the analyzer cannot prove correct is r
 
 **Other clauses.** `WHERE`, `GROUP BY`, join criteria and `SELECT DISTINCT` cannot read an aggregated column of a source MV.
 
-**Provenance propagation.**
+**Derivation propagation.**
 
-* A pass-through column keeps its source provenance, so a rollup of a rollup can still be checked.
+* A pass-through column keeps its source derivation, so a rollup of a rollup can still be checked.
 * An aggregated column passed through a join or `UNNEST` loses its function name, unless its function is duplicate-insensitive.
 * An expression over an aggregated column is recorded as an aggregate with no function.
 
@@ -494,17 +483,17 @@ None.
   * an unknown transform name;
   * an analyzed transform that encodes a name not owned by its provider;
   * a decoded transform that does not re-encode the stored name;
-  * metadata that the provider rejects;
-  * missing provenance;
-  * an unsupported provenance version.
+  * metadata that the provider rejects.
+* **Source derivation fails closed.** Creating a new tier fails if a source MV's defining SQL cannot be parsed or analyzed under its current catalog, schema and security context, or if an output column's derivation cannot be established.
 * **Effective-user boundary.** Caller system properties are inherited only when the effective user stays the same. Definer views and MVs owned by another user never see them.
 * **Security expressions.** Row filters and column masks are analyzed in a separate session that never inherits caller system properties.
-* **Connector opt-in.** The capability is a declaration that the engine trusts, not something it enforces. The provenance check is a second guard: if a connector advertises the capability but does not store provenance, rollups over its MVs are rejected.
+* **Connector opt-in.** The capability is a declaration that the engine trusts. The engine still analyzes every source definition and applies all query-shape and aggregate checks before calling the connector.
 
 ## Other Approaches Considered
 
 * **Remove the MV-over-MV restriction and rely on types.** Rejected. `COUNT` over a `COUNT` column goes from `BIGINT` to `BIGINT` and returns a plausible wrong number.
-* **Persist a resolved `FunctionHandle` as provenance.** Rejected. Handles are not guaranteed to stay compatible across releases, and MV definitions are long-lived. A name, subtype, type and version are stable.
+* **Persist column derivation in `MaterializedViewDefinition`.** Rejected. It duplicates information in the defining SQL, expands the connector JSON contract and requires every connector rewrite to preserve analyzer-specific state. The analyzer can derive the same information when a new tier is created.
+* **Persist a resolved `FunctionHandle`.** Rejected. Handles are not guaranteed to stay compatible across releases, and MV definitions are long-lived.
 * **Allow arbitrary query shapes and try to prove them correct.** Rejected for the first phase. Subqueries, CTEs, set operations and views can hide aggregates from the check. The single-`SELECT` rule can be relaxed later, one shape at a time, with tests.
 * **Build specific partition functions into the engine core.** Rejected. Partition layouts differ between deployments. A provider SPI keeps implementation-specific functions and formats in plugins.
 * **Put all rollup semantics in connectors.** Rejected, for two reasons:
@@ -524,10 +513,9 @@ None.
   * In `REFRESH ... WHERE`, an `OR` over directly mapped columns of a single table now filters that table instead of the view output. This applies only when the table is not on the outer side of an outer join.
 * **New SPI.** The additions are listed under SPI above. All of them are backward compatible for existing plugins and stored definitions. There are no SQL grammar or client API changes.
 * **Existing MVs.**
-  * New MVs record provenance and transform metadata automatically.
-  * MVs created before this change have none. They keep working, but they cannot be rollup sources until they are recreated, and the error message says so.
-  * In the Hive connector, recreating an MV drops its table, so the new MV starts empty and must be refreshed again.
-  * No migration tool is proposed initially. A metadata-upgrade mechanism can be considered if recreation proves costly in practice.
+  * Existing MVs can be rollup sources when their defining SQL still parses and analyzes under the current engine and plugin configuration.
+  * No metadata backfill or recreation is required for aggregate validation.
+  * A new partition transform is persisted only when an MV using that registered transform is created.
 * **Rollout.** The feature starts as experimental and off by default. Enabling it by default will be discussed separately, after more usage and more connector support.
 * **Documentation.**
   * The session property, the rollup rules and examples, in the materialized view docs.
@@ -541,18 +529,18 @@ Unit and integration tests in the implementation pull requests:
 
 * **`presto-spi`.**
   * `TestMaterializedViewAggregationMergeStrategy` and `TestMaterializedViewPartitionRange`.
-  * `TestMaterializedViewDefinition`: JSON round trips and backward compatibility.
+  * `TestMaterializedViewDefinition`: column-mapping JSON round trips and backward compatibility.
 * **`presto-main-base`.**
   * `TestMaterializedViewAggregationMergeRegistry`: built-ins, plugin strategies, duplicate rejection and atomic batches.
   * `TestMaterializedViewPartitionTransformRegistry`: namespace lookup, the deterministic scalar requirement, provider ownership and decoding.
-  * `TestMaterializedViewColumnMappingExtractor`: provenance, transform validation, and every accept and reject rule above.
+  * `TestMaterializedViewColumnMappingExtractor`: recursive source derivation, transform validation, and every accept and reject rule above.
   * `TestAnalyzer`: refresh predicate expansion, canonical values, identity transforms and `OR` pushdown.
   * `TestRowFilter` and `TestColumnMask`: caller system properties do not reach security expressions or definer views owned by other users.
 * **`presto-hive`.**
   * `TestHiveConnectorFactory`: the capability is advertised.
   * `TestHiveMaterializedViewLogicalPlanner`, end to end:
     * a `COUNT` rollup over a `COUNT` column is rejected, and the `SUM` rollup is accepted;
-    * provenance and base-table catalogs survive the metastore round trip;
+    * base-table catalogs survive the metastore round trip;
     * `materialized_view_data_consistency_enabled` is honored through nested logical views.
 
 Before the feature is enabled by default:
@@ -563,7 +551,6 @@ Before the feature is enabled by default:
 ## Open Questions
 
 
-
 ## Appendix: Reference Implementation
 
 The implementation is a stack of five pull requests:
@@ -571,8 +558,8 @@ The implementation is a stack of five pull requests:
 | Part | Pull request | Main classes |
 |---|---|---|
 | Extension points | [#28717](https://github.com/prestodb/presto/pull/28717) | `Plugin`, the `com.facebook.presto.spi.materializedview` package, `MaterializedViewAggregationMergeRegistry`, `MaterializedViewPartitionTransformRegistry`, `FunctionAndTypeManager`, `PluginManager` |
-| Derivation metadata | [#28718](https://github.com/prestodb/presto/pull/28718) | `MaterializedViewDefinition`, `MaterializedViewColumnMappingExtractor`, `CreateMaterializedViewTask` |
-| MVs over MVs | [#28719](https://github.com/prestodb/presto/pull/28719) | `StatementAnalyzer`, `MaterializedViewColumnMappingExtractor`, `CreateMaterializedViewTask`, `SystemSessionProperties`, `ConnectorCapabilities`, `HiveConnector`, `HiveMetadata` |
+| Column mapping metadata | [#28718](https://github.com/prestodb/presto/pull/28718) | `MaterializedViewDefinition`, `MaterializedViewColumnMappingExtractor`, `CreateMaterializedViewTask` |
+| MVs over MVs | [#28719](https://github.com/prestodb/presto/pull/28719) | `StatementAnalyzer`, `MaterializedViewColumnDerivationResolver`, `MaterializedViewColumnMappingExtractor`, `CreateMaterializedViewTask`, `SystemSessionProperties`, `ConnectorCapabilities`, `HiveConnector`, `HiveMetadata` |
 | Refresh predicates | [#28720](https://github.com/prestodb/presto/pull/28720) | `RefreshMaterializedViewPredicateAnalyzer` |
 | Session fix | [#28721](https://github.com/prestodb/presto/pull/28721) | `StatementAnalyzer` |
 
@@ -590,9 +577,12 @@ StatementAnalyzer (analysis)
 
 CreateMaterializedViewTask (execution)
   MaterializedViewColumnMappingExtractor
+    MaterializedViewColumnDerivationResolver   -> analyze each source MV's
+                                                  original SQL once per CREATE;
+                                                  recurse through nested MVs
     validateAggregateMergePartners             -> query-shape and aggregate rules
-    column mappings, provenance, transform metadata
-  ConnectorMetadata.createMaterializedView     -> Hive stores provenance and
+    column mappings, transform metadata
+  ConnectorMetadata.createMaterializedView     -> Hive stores mappings and
                                                   base-table catalogs
 ```
 
