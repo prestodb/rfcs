@@ -19,7 +19,7 @@ Proposers
   * apache/hudi#16969 — push index scan down to workers
 * apache/hudi#18837 — RFC-105: Trino-Hudi connector moved into the Hudi repository, including MDT index support
 * apache/hudi#17042 — hanging Trino queries with column stats enabled (no repro yet)
-* Reference implementation PR: _link to be added_
+* Reference implementation: prestodb/presto#28781
 
 ## Summary
 
